@@ -1,0 +1,45 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [ "main", "master", "movable-edges" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '6.5.0'  # Укажите вашу версию Qt (или 6.5.0 как стабильную)
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_mingw'
+        dir: '${{ github.workspace }}/qt/'
+        install-deps: 'true'
+
+    - name: Build
+      run: |
+        qmake
+        mingw32-make
+
+    - name: Deploy (Package DLLs)
+      run: |
+        # Создаем папку для сборки
+        mkdir dist
+        # Копируем exe файл (обычно он в папке release)
+        copy release\*.exe dist\
+        # Запускаем windeployqt чтобы подтянуть все нужные DLL
+        windeployqt --release --compiler-runtime dist\*.exe
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: GraphEditor-Windows
+        path: dist/
