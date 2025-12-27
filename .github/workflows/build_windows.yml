@@ -2,7 +2,7 @@ name: Windows Build
 
 on:
   push:
-    branches: [ "main", "master", "movable-edges" ]
+    branches: [ "main", "master", "interactive-viz" ]
   pull_request:
     branches: [ "main", "master" ]
 
@@ -14,36 +14,51 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Устанавливаем Qt для компилятора MSVC 2019 (он совместим с Windows 2022)
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
         version: '6.5.0'
         host: 'windows'
         target: 'desktop'
-        arch: 'win64_msvc2019_64'  # ВАЖНО: Используем MSVC вместо MinGW
+        arch: 'win64_msvc2019_64'
         dir: '${{ github.workspace }}/qt/'
         install-deps: 'true'
         cache: 'true'
 
-    # Настраиваем окружение для MSVC компилятора
     - name: Setup MSVC environment
       uses: ilammy/msvc-dev-cmd@v1
 
-    # Сборка проекта
     - name: Build
       run: |
-        qmake
+        qmake CONFIG+=release
         nmake
-        
-    # Упаковка (сборка в папку dist вместе с DLL)
-    - name: Deploy (Package DLLs)
-      run: |
-        mkdir dist
-        copy release\*.exe dist\
-        windeployqt --release --compiler-runtime dist\*.exe
 
-    # Загрузка результата на сайт
+    - name: Deploy (Find and Package)
+      shell: powershell
+      run: |
+        # Создаем папку dist
+        New-Item -ItemType Directory -Force -Path dist
+        
+        # 1. Ищем .exe файл рекурсивно во всех папках (кроме самой dist)
+        # Мы берем первый попавшийся exe, который был создан только что
+        $exeFile = Get-ChildItem -Path . -Filter *.exe -Recurse | Where-Object { $_.DirectoryName -notmatch "dist" -and $_.Name -notmatch "qmake" } | Select-Object -First 1
+        
+        if ($exeFile) {
+            Write-Host "FOUND EXE: $($exeFile.FullName)"
+            Copy-Item $exeFile.FullName -Destination dist\
+        } else {
+            Write-Error "CRITICAL: .exe file not found after build!"
+            # Выводим список всех файлов, чтобы понять, что пошло не так (для отладки)
+            Get-ChildItem -Recurse
+            exit 1
+        }
+        
+        # 2. Запускаем windeployqt
+        windeployqt --release --compiler-runtime dist\*.exe
+        
+        # 3. Удаляем лишние файлы (obj, cpp, h), если они случайно попали, оставляем только exe и dll
+        Get-ChildItem -Path dist -Recurse | Where-Object { $_.Extension -in ".obj", ".cpp", ".h", ".exp", ".lib" } | Remove-Item
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
