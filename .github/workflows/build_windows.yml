@@ -2,7 +2,7 @@ name: Windows Build
 
 on:
   push:
-    branches: [ "main", "master", "interactive-viz" ]
+    branches: [ "main", "master", "movable-edges" ]
   pull_request:
     branches: [ "main", "master" ]
 
