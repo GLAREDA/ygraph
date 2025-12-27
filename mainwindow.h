@@ -10,6 +10,8 @@
 #include <QLabel>
 #include <QTextEdit>
 #include <QMap>
+#include "node.h"
+#include "edge.h"
 
 class Graph;
 
@@ -22,7 +24,6 @@ public:
     ~MainWindow();
 
 protected:
-    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
     void onGenerateClicked();
@@ -68,7 +69,7 @@ QString traversalToString(const QVector<int>& traversal);
     QLabel *statusLabel;
     QTextEdit *graphPropertiesDisplay;
     QLabel *hintLabel;
-    QMap<int, QGraphicsEllipseItem*> nodes;
+    QMap<int, Node*> nodes;
     QPushButton *colorButton;
     QPushButton *bipartiteButton;
     QPushButton *cycleButton;
