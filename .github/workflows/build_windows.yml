@@ -2,7 +2,7 @@ name: Windows Build
 
 on:
   push:
-    branches: [ "main", "master", "movable-edges" ]
+    branches: [ "main", "master", "fixed-edges", "interactive-viz" ]
   pull_request:
     branches: [ "main", "master" ]
 
@@ -30,34 +30,56 @@ jobs:
 
     - name: Build
       run: |
-        qmake CONFIG+=release
+        qmake "CONFIG+=release"
         nmake
 
-    - name: Deploy (Find and Package)
+    - name: Deploy (Strict Search)
       shell: powershell
       run: |
         # Создаем папку dist
         New-Item -ItemType Directory -Force -Path dist
         
-        # 1. Ищем .exe файл рекурсивно во всех папках (кроме самой dist)
-        # Мы берем первый попавшийся exe, который был создан только что
-        $exeFile = Get-ChildItem -Path . -Filter *.exe -Recurse | Where-Object { $_.DirectoryName -notmatch "dist" -and $_.Name -notmatch "qmake" } | Select-Object -First 1
+        Write-Host "--- SEARCHING FOR EXE ---"
         
+        # 1. СТРОГИЙ ПОИСК: Ищем только в папке 'release'.
+        # Это стандартное место, куда qmake кладет exe файл.
+        $exeFile = Get-ChildItem -Path "release" -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        # 2. ЗАПАСНОЙ ВАРИАНТ: Ищем в корне, но БЕЗ рекурсии (-MaxDepth 1).
+        # Это гарантирует, что мы не залезем в папку qt/ и не найдем мусор.
+        if (-not $exeFile) {
+            Write-Host "Not found in 'release'. Checking root folder..."
+            $exeFile = Get-ChildItem -Path "." -Filter *.exe -MaxDepth 1 | Where-Object { $_.Name -notmatch "qmake" } | Select-Object -First 1
+        }
+
         if ($exeFile) {
-            Write-Host "FOUND EXE: $($exeFile.FullName)"
+            Write-Host "SUCCESS: Found exe at $($exeFile.FullName)"
+            
+            # Копируем ваш Lastversion.exe в папку dist
             Copy-Item $exeFile.FullName -Destination dist\
+            
+            # Определяем новый путь
+            $destExe = "dist\$($exeFile.Name)"
+            
+            # Запускаем windeployqt для этого конкретного файла
+            Write-Host "Running windeployqt..."
+            windeployqt --release --compiler-runtime --no-translations $destExe
+            
+            # Удаляем мусор, который мог скопироваться
+            Get-ChildItem -Path dist -Recurse | Where-Object { $_.Extension -in ".obj", ".cpp", ".h", ".exp", ".lib", ".ilk", ".pdb" } | Remove-Item
+            
         } else {
-            Write-Error "CRITICAL: .exe file not found after build!"
-            # Выводим список всех файлов, чтобы понять, что пошло не так (для отладки)
-            Get-ChildItem -Recurse
+            Write-Error "BUILD ERROR: Could not find Lastversion.exe (or any other .exe)!"
+            
+            # Вывод содержимого для отладки, если снова не найдет
+            Write-Host "Content of 'release' folder:"
+            Get-ChildItem -Path "release" -ErrorAction SilentlyContinue
+            
+            Write-Host "Content of root folder:"
+            Get-ChildItem -Path "." -MaxDepth 1
+            
             exit 1
         }
-        
-        # 2. Запускаем windeployqt
-        windeployqt --release --compiler-runtime dist\*.exe
-        
-        # 3. Удаляем лишние файлы (obj, cpp, h), если они случайно попали, оставляем только exe и dll
-        Get-ChildItem -Path dist -Recurse | Where-Object { $_.Extension -in ".obj", ".cpp", ".h", ".exp", ".lib" } | Remove-Item
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
