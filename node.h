@@ -4,6 +4,7 @@
 #include <QGraphicsItem>
 #include <QList>
 #include <QBrush>
+#include <QColor> // Добавлено
 
 class Edge;
 
@@ -16,9 +17,13 @@ public:
     QList<Edge *> edges() const;
     int getId() const { return id; }
 
-    // Новые методы для управления цветом из MainWindow
+    // Управление цветом
     void setColor(const QColor &color);
-    void resetColor();
+    void resetColor(); // Сброс к синему
+
+    // Физика
+    void calculateForces();
+    bool advancePosition();
 
     enum { Type = UserType + 1 };
     int type() const override { return Type; }
@@ -34,8 +39,8 @@ protected:
 private:
     QList<Edge *> edgeList;
     int id;
-    QColor currentColor;
-    const QColor defaultColor = QColor(70, 130, 180); // Стандартный синий
+    QColor currentColor; // Текущий цвет
+    QPointF newPos;      // Для физики
 };
 
 #endif // NODE_H

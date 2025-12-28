@@ -15,7 +15,6 @@
 #include <cmath>
 #include <algorithm>
 #include <numeric>
-#include <QEvent>
 #include <QStack>
 #include <QQueue>
 #include <QSet>
@@ -31,10 +30,14 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), graph(new Graph()), updatingMatrix(false)
 {
+    // Инициализация
+    animationTimer = nullptr;
+    physicsTimer = new QTimer(this);
+    graphGeneration = 0; // Счетчик поколений
+
     scene = new QGraphicsScene(this);
     view = new QGraphicsView(scene);
 
-    // Инициализация UI элементов
     matrixTable = new QTableWidget();
     generateButton = new QPushButton("Построить граф");
     calcButton = new QPushButton("Вычислить свойства");
@@ -45,7 +48,6 @@ MainWindow::MainWindow(QWidget *parent)
     graphPropertiesDisplay = new QTextEdit();
     hintLabel = new QLabel();
     traversalButton = new QPushButton("Визуализировать обход");
-    traversalButton->setFixedHeight(30);
     startVertexCombo = new QComboBox();
 
     setupUI();
@@ -56,13 +58,29 @@ MainWindow::MainWindow(QWidget *parent)
     view->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     view->setDragMode(QGraphicsView::RubberBandDrag);
 
-    setWindowTitle("Редактор графов (Интерактивный)");
+    setWindowTitle("Редактор графов");
     resize(1200, 800);
 }
 
 MainWindow::~MainWindow()
 {
+    stopAndReset();
     delete graph;
+}
+
+// === ЯДЕРНАЯ ФУНКЦИЯ ОЧИСТКИ ===
+void MainWindow::stopAndReset() {
+    // 1. Если таймер существует - разрываем соединение
+    if (animationTimer) {
+        animationTimer->disconnect(); // Разрываем связь с лямбдой
+        if (animationTimer->isActive()) {
+            animationTimer->stop();
+        }
+        delete animationTimer;
+        animationTimer = nullptr;
+    }
+    // 2. Сбрасываем цвета
+    resetEdgeColors();
 }
 
 void MainWindow::setupUI()
@@ -70,44 +88,28 @@ void MainWindow::setupUI()
     QWidget *centralWidget = new QWidget(this);
     QHBoxLayout *mainLayout = new QHBoxLayout(centralWidget);
 
-    // Левая панель - ввод
     QGroupBox *inputGroup = new QGroupBox("Ввод матрицы");
     QVBoxLayout *inputLayout = new QVBoxLayout(inputGroup);
 
     representationCombo->addItem("Матрица смежности");
     representationCombo->addItem("Матрица инцидентности");
-    representationCombo->setCurrentIndex(0);
 
-    for (int i = 2; i <= 10; ++i) {
-        sizeCombo->addItem(QString("%1x%1").arg(i), i);
-    }
+    for (int i = 2; i <= 10; ++i) sizeCombo->addItem(QString("%1x%1").arg(i), i);
     sizeCombo->setCurrentIndex(1);
 
     matrixTable->setEditTriggers(QAbstractItemView::AllEditTriggers);
     matrixTable->setSelectionMode(QAbstractItemView::SingleSelection);
-    matrixTable->setStyleSheet(
-        "QTableWidget { font: 12px; background-color: transparent; }"
-        "QTableWidget::item { border: 1px solid #dcdcdc; }"
-    );
+    matrixTable->setStyleSheet("QTableWidget { font: 12px; background-color: transparent; } QTableWidget::item { border: 1px solid #dcdcdc; }");
     matrixTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     matrixTable->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     matrixTable->setFixedHeight(300);
-    matrixTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
-    matrixTable->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
-
-    generateButton->setFixedHeight(30);
-    calcButton->setFixedHeight(30);
-    resizeButton->setFixedHeight(30);
-
-    hintLabel->setText("Для матрицы инцидентности: 2 единицы в столбце");
-    hintLabel->setVisible(false);
 
     QHBoxLayout *sizeLayout = new QHBoxLayout();
-    sizeLayout->addWidget(new QLabel("Количество вершин:"));
+    sizeLayout->addWidget(new QLabel("Вершин:"));
     sizeLayout->addWidget(sizeCombo);
     sizeLayout->addWidget(resizeButton);
 
-    inputLayout->addWidget(new QLabel("Тип матрицы:"));
+    inputLayout->addWidget(new QLabel("Тип:"));
     inputLayout->addWidget(representationCombo);
     inputLayout->addLayout(sizeLayout);
     inputLayout->addWidget(new QLabel("Матрица:"));
@@ -116,60 +118,33 @@ void MainWindow::setupUI()
     inputLayout->addWidget(generateButton);
     inputLayout->addWidget(calcButton);
 
-    // Кнопки алгоритмов
     cycleButton = new QPushButton("Поиск циклов");
-    cycleButton->setFixedHeight(30);
-    inputLayout->addWidget(cycleButton);
-
     colorButton = new QPushButton("Раскрасить граф");
-    colorButton->setFixedHeight(30);
+    bipartiteButton = new QPushButton("Проверка двудольности");
+    QPushButton *criticalButton = new QPushButton("Критические элементы");
+    QPushButton *pathButton = new QPushButton("Кратчайший путь");
+    QPushButton *physicsBtn = new QPushButton("Вкл/Выкл Физику");
+    physicsBtn->setCheckable(true);
+
+    connect(physicsBtn, &QPushButton::toggled, [=](bool c){ if(c) physicsTimer->start(30); else physicsTimer->stop(); });
+
+    inputLayout->addWidget(cycleButton);
     inputLayout->addWidget(colorButton);
-
-    bipartiteButton = new QPushButton("Проверить двудольность");
-    bipartiteButton->setFixedHeight(30);
     inputLayout->addWidget(bipartiteButton);
-
-    QPushButton *criticalButton = new QPushButton("Показать критические элементы");
-    criticalButton->setFixedHeight(30);
     inputLayout->addWidget(criticalButton);
-    connect(criticalButton, &QPushButton::clicked, this, &MainWindow::highlightBridgesAndArticulations);
-
-    // Добавляем кнопку для Дейкстры (её не было в setupUI раньше)
-    QPushButton *pathButton = new QPushButton("Найти кратчайший путь");
-    pathButton->setFixedHeight(30);
     inputLayout->addWidget(pathButton);
-    connect(pathButton, &QPushButton::clicked, this, &MainWindow::visualizeShortestPath);
-
+    inputLayout->addWidget(physicsBtn);
     inputLayout->addWidget(statusLabel);
 
-    // Центральная панель
-    QGroupBox *graphGroup = new QGroupBox("Визуализация графа");
+    connect(criticalButton, &QPushButton::clicked, this, &MainWindow::highlightBridgesAndArticulations);
+    connect(pathButton, &QPushButton::clicked, this, &MainWindow::visualizeShortestPath);
+
+    QGroupBox *graphGroup = new QGroupBox("Визуализация");
     QVBoxLayout *graphLayout = new QVBoxLayout(graphGroup);
-    view->setScene(scene);
     graphLayout->addWidget(view);
 
-    // Тулбар экспорта
-    exportToolBar = new QToolBar("Экспорт", this);
-    saveImageAction = new QAction("Сохр. IMG", this);
-    saveDotAction = new QAction("Сохр. DOT", this);
-    exportToolBar->addAction(saveImageAction);
-    exportToolBar->addAction(saveDotAction);
-    addToolBar(Qt::TopToolBarArea, exportToolBar);
-
-    connect(saveImageAction, &QAction::triggered, this, &MainWindow::saveGraphToImage);
-    connect(saveDotAction, &QAction::triggered, this, &MainWindow::saveGraphToDotFile);
-
-    // Панель обхода
-    inputLayout->addWidget(new QLabel("Начальная вершина:"));
-    inputLayout->addWidget(startVertexCombo);
-    inputLayout->addWidget(traversalButton);
-    connect(traversalButton, &QPushButton::clicked, this, &MainWindow::visualizeTraversal);
-
-    // Правая панель
-    QGroupBox *propsGroup = new QGroupBox("Свойства графа");
+    QGroupBox *propsGroup = new QGroupBox("Свойства");
     QVBoxLayout *propsLayout = new QVBoxLayout(propsGroup);
-    graphPropertiesDisplay->setReadOnly(true);
-    graphPropertiesDisplay->setStyleSheet("font-family: monospace;");
     propsLayout->addWidget(graphPropertiesDisplay);
 
     mainLayout->addWidget(inputGroup, 1);
@@ -177,12 +152,34 @@ void MainWindow::setupUI()
     mainLayout->addWidget(propsGroup, 1);
     setCentralWidget(centralWidget);
 
+    exportToolBar = new QToolBar("Экспорт", this);
+    saveImageAction = new QAction("IMG", this);
+    saveDotAction = new QAction("DOT", this);
+    exportToolBar->addAction(saveImageAction);
+    exportToolBar->addAction(saveDotAction);
+    addToolBar(Qt::TopToolBarArea, exportToolBar);
+
+    connect(saveImageAction, &QAction::triggered, this, &MainWindow::saveGraphToImage);
+    connect(saveDotAction, &QAction::triggered, this, &MainWindow::saveGraphToDotFile);
+
+    inputLayout->addWidget(new QLabel("Старт:"));
+    inputLayout->addWidget(startVertexCombo);
+    inputLayout->addWidget(traversalButton);
+    connect(traversalButton, &QPushButton::clicked, this, &MainWindow::visualizeTraversal);
+
     onRepresentationChanged(0);
 }
 
 void MainWindow::updateGraphView() {
+    stopAndReset();
+
+    // === ЗАЩИТА: Увеличиваем счетчик поколений ===
+    graphGeneration++;
+    // =============================================
+
     scene->clear();
     nodes.clear();
+
     if (!graph || graph->nodeCount() == 0) return;
 
     const qreal centerX = view->width() / 2.0;
@@ -194,7 +191,6 @@ void MainWindow::updateGraphView() {
         qreal angle = 2 * M_PI * i / graph->nodeCount();
         QPointF newPos(centerX + circleRadius * cos(angle), centerY + circleRadius * sin(angle));
 
-        // Разброс, чтобы не слипались
         for (const QPointF& pos : positions) {
              if (QLineF(newPos, pos).length() < 60) {
                  circleRadius *= 1.1;
@@ -213,9 +209,7 @@ void MainWindow::updateGraphView() {
     for (int i = 0; i < adjMatrix.size(); ++i) {
         for (int j = i; j < adjMatrix[i].size(); ++j) {
             if (adjMatrix[i][j] > 0 && nodes.contains(i) && nodes.contains(j)) {
-                Node *u = nodes[i];
-                Node *v = nodes[j];
-                Edge *edge = new Edge(u, v, adjMatrix[i][j]);
+                Edge *edge = new Edge(nodes[i], nodes[j], adjMatrix[i][j]);
                 scene->addItem(edge);
             }
         }
@@ -227,22 +221,20 @@ void MainWindow::updateGraphView() {
     }
 }
 
+
 void MainWindow::resetEdgeColors() {
     for (auto item : scene->items()) {
         if (auto edge = dynamic_cast<Edge*>(item)) edge->resetColor();
+        if (auto node = dynamic_cast<Node*>(item)) node->resetColor();
     }
-    for (auto node : nodes) node->resetColor();
 }
 
 void MainWindow::highlightEdge(int u, int v, const QColor& color) {
     if (!nodes.contains(u) || !nodes.contains(v)) return;
-    Node* nodeU = nodes[u];
-    Node* nodeV = nodes[v];
-
     for (auto item : scene->items()) {
         if (auto edge = dynamic_cast<Edge*>(item)) {
-            if ((edge->sourceNode() == nodeU && edge->destNode() == nodeV) ||
-                (edge->sourceNode() == nodeV && edge->destNode() == nodeU)) {
+            if ((edge->sourceNode() == nodes[u] && edge->destNode() == nodes[v]) ||
+                (edge->sourceNode() == nodes[v] && edge->destNode() == nodes[u])) {
                 edge->setColor(color);
             }
         }
@@ -250,45 +242,90 @@ void MainWindow::highlightEdge(int u, int v, const QColor& color) {
 }
 
 void MainWindow::highlightTraversal(const QVector<int>& traversal, const QColor& color) {
+    stopAndReset();
     if (traversal.isEmpty()) return;
-    resetEdgeColors();
 
-    QTimer *timer = new QTimer(this);
+    animationTimer = new QTimer(this);
     int index = 0;
-    connect(timer, &QTimer::timeout, [=]() mutable {
+
+    // Запоминаем текущее поколение графа
+    long long currentGen = graphGeneration;
+
+    connect(animationTimer, &QTimer::timeout, [=]() mutable {
+        // ЕСЛИ ПОКОЛЕНИЕ ИЗМЕНИЛОСЬ - ПРЕРЫВАЕМСЯ
+        if (this->graphGeneration != currentGen) {
+            return;
+        }
+
         if (index < traversal.size()) {
             int vertex = traversal[index];
             if (nodes.contains(vertex)) {
                 nodes[vertex]->setColor(color);
-                if (index > 0) {
-                    highlightEdge(traversal[index-1], vertex, Qt::yellow);
-                }
+                if (index > 0) highlightEdge(traversal[index-1], vertex, Qt::yellow);
             }
             index++;
         } else {
-            timer->stop();
-            timer->deleteLater();
+            if (animationTimer) animationTimer->stop();
         }
     });
-    timer->start(500);
-}
-
-QString MainWindow::traversalToString(const QVector<int>& traversal) {
-    QStringList vertices;
-    for (int v : traversal) vertices << QString::number(v + 1);
-    return vertices.join(" → ");
+    animationTimer->start(500);
 }
 
 void MainWindow::highlightPath(const QVector<int>& path, const QColor& color) {
+    stopAndReset();
     if (path.isEmpty()) return;
-    resetEdgeColors();
 
-    for (int vertex : path) {
-        if (nodes.contains(vertex)) nodes[vertex]->setColor(color);
+    for (int vertex : path) if (nodes.contains(vertex)) nodes[vertex]->setColor(color);
+    for (int i = 0; i < path.size() - 1; ++i) highlightEdge(path[i], path[i+1], Qt::red);
+}
+
+void MainWindow::checkCycles() {
+    if (!graph || graph->nodeCount() == 0) return;
+    stopAndReset();
+
+    QVector<QVector<int>> allCycles = graph->findAllCycles();
+    if (!allCycles.empty()) {
+        QString cyclesInfo = "\n=== Найденные циклы ===\n";
+        int cycleNum = 1;
+        QVector<QColor> cycleColors = {Qt::red, Qt::blue, Qt::green, Qt::magenta};
+        foreach (const QVector<int>& cycle, allCycles) {
+            if (cycle.size() < 3 || cycle.first() != cycle.last()) continue;
+            QStringList vertices;
+            for (int i = 0; i < cycle.size()-1; ++i) vertices << QString::number(cycle[i] + 1);
+            vertices << QString::number(cycle.first() + 1);
+            cyclesInfo += QString("Цикл %1: %2\n").arg(cycleNum).arg(vertices.join(" → "));
+
+            QColor color = cycleColors[(cycleNum-1) % cycleColors.size()];
+            for (int i = 0; i < cycle.size()-1; ++i) highlightEdge(cycle[i], cycle[i+1], color);
+            cycleNum++;
+        }
+        graphPropertiesDisplay->append(cyclesInfo);
+    } else {
+        graphPropertiesDisplay->append("\nГраф ациклический");
     }
-    for (int i = 0; i < path.size() - 1; ++i) {
-        highlightEdge(path[i], path[i+1], Qt::red);
+}
+
+void MainWindow::colorGraph() {
+    if (!graph || graph->nodeCount() == 0) return;
+    stopAndReset();
+
+    QVector<int> colors = graph->greedyColoring();
+    QVector<QColor> colorPalette = { Qt::red, Qt::blue, Qt::green, Qt::yellow, Qt::magenta, Qt::cyan };
+    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+        it.value()->setColor(colorPalette[colors[it.key()] % colorPalette.size()]);
     }
+    graphPropertiesDisplay->append(QString("\nРаскраска завершена."));
+}
+
+void MainWindow::highlightBridgesAndArticulations() {
+    if (!graph || graph->nodeCount() == 0) return;
+    stopAndReset();
+
+    QVector<QPair<int, int>> bridges = graph->getBridges();
+    for (const auto& bridge : bridges) highlightEdge(bridge.first, bridge.second, Qt::red);
+    QVector<int> articulations = graph->getArticulationPoints();
+    for (int v : articulations) if (nodes.contains(v)) nodes[v]->setColor(QColor(255, 165, 0));
+    graphPropertiesDisplay->append(QString("\nМостов: %1, Точек сочленения: %2").arg(bridges.size()).arg(articulations.size()));
 }
 
 void MainWindow::visualizeTraversal() {
@@ -314,123 +351,37 @@ void MainWindow::visualizeTraversal() {
 
 void MainWindow::visualizeShortestPath() {
     if (!graph || graph->nodeCount() == 0) return;
-
     bool ok;
-    int start = QInputDialog::getInt(this, "Поиск пути",
-        QString("От вершины (1-%1):").arg(graph->nodeCount()), 1, 1, graph->nodeCount(), 1, &ok);
+    int start = QInputDialog::getInt(this, "Путь", QString("От (1-%1):").arg(graph->nodeCount()), 1, 1, graph->nodeCount(), 1, &ok);
     if (!ok) return;
-
-    int end = QInputDialog::getInt(this, "Поиск пути",
-        QString("До вершины (1-%1):").arg(graph->nodeCount()), graph->nodeCount(), 1, graph->nodeCount(), 1, &ok);
+    int end = QInputDialog::getInt(this, "Путь", QString("До (1-%1):").arg(graph->nodeCount()), graph->nodeCount(), 1, graph->nodeCount(), 1, &ok);
     if (!ok) return;
 
     QVector<int> path = graph->dijkstra(start - 1, end - 1);
-
-    if (path.isEmpty()) {
-        QMessageBox::information(this, "Результат", "Путь не найден");
-    } else {
+    if (path.isEmpty()) QMessageBox::information(this, "Инфо", "Путь не найден");
+    else {
         QStringList pathStr;
         for (int v : path) pathStr << QString::number(v + 1);
-        graphPropertiesDisplay->append(QString("\nПуть %1 -> %2: %3")
-                                     .arg(start).arg(end).arg(pathStr.join(" -> ")));
+        graphPropertiesDisplay->append(QString("\nПуть: %1").arg(pathStr.join(" -> ")));
         highlightPath(path, Qt::red);
     }
 }
 
-void MainWindow::saveGraphToImage() {
-    if (!graph || nodes.empty()) return;
-    QString fileName = QFileDialog::getSaveFileName(this, "Сохранить", "", "PNG (*.png);;JPEG (*.jpg)");
-    if (fileName.isEmpty()) return;
-    scene->clearSelection();
-    QRectF sceneRect = scene->itemsBoundingRect().adjusted(-20, -20, 20, 20);
-    QImage image(sceneRect.size().toSize(), QImage::Format_ARGB32);
-    image.fill(Qt::white);
-    QPainter painter(&image);
-    scene->render(&painter, QRectF(), sceneRect);
-    painter.end();
-    image.save(fileName);
-}
-
-void MainWindow::exportToDotFile(const QString& fileName) {
-    QFile file(fileName);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
-    QTextStream out(&file);
-    out << "graph G {\n    node [shape=circle, style=filled, fillcolor=lightblue];\n";
-    for (int i = 0; i < graph->nodeCount(); ++i) out << QString("    %1 [label=\"%2\"];\n").arg(i+1).arg(i+1);
-    const auto &adjMatrix = graph->adjacencyMatrix();
-    for (int i = 0; i < adjMatrix.size(); ++i) {
-        for (int j = i; j < adjMatrix[i].size(); ++j) {
-            if (adjMatrix[i][j] > 0) {
-                out << QString("    %1 -- %2").arg(i+1).arg(j+1);
-                if (adjMatrix[i][j] != 1) out << QString(" [label=\"%1\"]").arg(adjMatrix[i][j]);
-                out << ";\n";
-            }
-        }
-    }
-    out << "}\n";
-    file.close();
-}
-
-void MainWindow::saveGraphToDotFile() {
-    QString fileName = QFileDialog::getSaveFileName(this, "Сохранить DOT", "", "DOT Files (*.dot)");
-    if (!fileName.isEmpty()) exportToDotFile(fileName);
-}
-
-void MainWindow::setupMatrixConnections() {
-    connect(cycleButton, &QPushButton::clicked, this, &MainWindow::checkCycles);
-    connect(bipartiteButton, &QPushButton::clicked, this, &MainWindow::checkBipartite);
-    connect(colorButton, &QPushButton::clicked, this, &MainWindow::colorGraph);
-    connect(representationCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onRepresentationChanged);
-    connect(matrixTable, &QTableWidget::cellChanged, this, &MainWindow::onMatrixCellChanged);
-    connect(generateButton, &QPushButton::clicked, this, &MainWindow::onGenerateClicked);
-    connect(calcButton, &QPushButton::clicked, this, &MainWindow::calculateGraphProperties);
-    connect(resizeButton, &QPushButton::clicked, this, &MainWindow::resizeMatrix);
-}
-
-void MainWindow::checkCycles() {
+void MainWindow::checkBipartite() {
     if (!graph || graph->nodeCount() == 0) return;
-    resetEdgeColors();
-    QVector<QVector<int>> allCycles = graph->findAllCycles();
-    if (!allCycles.empty()) {
-        QString cyclesInfo = "\n=== Найденные циклы ===\n";
-        int cycleNum = 1;
-        QVector<QColor> cycleColors = {Qt::red, Qt::blue, Qt::green, Qt::magenta};
-        foreach (const QVector<int>& cycle, allCycles) {
-            if (cycle.size() < 3 || cycle.first() != cycle.last()) continue;
-            QStringList vertices;
-            for (int i = 0; i < cycle.size()-1; ++i) vertices << QString::number(cycle[i] + 1);
-            vertices << QString::number(cycle.first() + 1);
-            cyclesInfo += QString("Цикл %1: %2\n").arg(cycleNum).arg(vertices.join(" → "));
-            QColor color = cycleColors[(cycleNum-1) % cycleColors.size()];
-            for (int i = 0; i < cycle.size()-1; ++i) highlightEdge(cycle[i], cycle[i+1], color);
-            cycleNum++;
+    stopAndReset();
+    if (graph->isBipartite()) {
+        QVector<int> colors = graph->bipartiteColoring();
+        for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+            it.value()->setColor(colors[it.key()] == 0 ? Qt::red : Qt::blue);
         }
-        graphPropertiesDisplay->append(cyclesInfo);
+        graphPropertiesDisplay->append("\nГраф двудольный");
     } else {
-        graphPropertiesDisplay->append("\nГраф ациклический");
+        graphPropertiesDisplay->append("\nГраф не двудольный");
     }
 }
 
-void MainWindow::colorGraph() {
-    if (!graph || graph->nodeCount() == 0) return;
-    QVector<int> colors = graph->greedyColoring();
-    QVector<QColor> colorPalette = { Qt::red, Qt::blue, Qt::green, Qt::yellow, Qt::magenta, Qt::cyan };
-    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
-        int colorIndex = colors[it.key()] % colorPalette.size();
-        it.value()->setColor(colorPalette[colorIndex]);
-    }
-    graphPropertiesDisplay->append(QString("\nРаскраска завершена. Цветов: %1").arg(*std::max_element(colors.begin(), colors.end()) + 1));
-}
-
-void MainWindow::highlightBridgesAndArticulations() {
-    if (!graph || graph->nodeCount() == 0) return;
-    resetEdgeColors();
-    QVector<QPair<int, int>> bridges = graph->getBridges();
-    for (const auto& bridge : bridges) highlightEdge(bridge.first, bridge.second, Qt::red);
-    QVector<int> articulations = graph->getArticulationPoints();
-    for (int v : articulations) if (nodes.contains(v)) nodes[v]->setColor(QColor(255, 165, 0));
-    graphPropertiesDisplay->append(QString("\nМостов: %1, Точек сочленения: %2").arg(bridges.size()).arg(articulations.size()));
-}
+// === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ФОРМАТИРОВАНИЕ ВОССТАНОВЛЕНО) ===
 void MainWindow::calculateGraphProperties() {
     if (!graph || graph->nodeCount() == 0) return;
 
@@ -477,19 +428,17 @@ void MainWindow::calculateGraphProperties() {
         }
     }
 
-    // 2. Связность и специальные свойства
+    // 4. Связность и специальные свойства
     propertiesText += "\n=== Связность и специальные свойства ===\n";
     propertiesText += QString("Граф %1эйлеров\n").arg(graph->isEulerian() ? "" : "не ");
     propertiesText += QString("Граф %1связный\n").arg(graph->isConnected() ? "" : "не ");
 
-    // 3. Точки сочленения и мосты
+    // 5. Критические элементы
     propertiesText += "\n=== Критические элементы ===\n";
     QVector<int> articulationPoints = graph->findArticulationPoints();
     if (!articulationPoints.isEmpty()) {
         QStringList apList;
-        for (int v : articulationPoints) {
-            apList << QString::number(v + 1);
-        }
+        for (int v : articulationPoints) apList << QString::number(v + 1);
         propertiesText += QString("Точки сочленения: %1\n").arg(apList.join(", "));
     } else {
         propertiesText += "Точек сочленения нет\n";
@@ -498,9 +447,7 @@ void MainWindow::calculateGraphProperties() {
     QVector<QPair<int, int>> bridges = graph->findBridges();
     if (!bridges.isEmpty()) {
         QStringList bridgeList;
-        for (auto bridge : bridges) {
-            bridgeList << QString("(%1-%2)").arg(bridge.first + 1).arg(bridge.second + 1);
-        }
+        for (auto bridge : bridges) bridgeList << QString("(%1-%2)").arg(bridge.first + 1).arg(bridge.second + 1);
         propertiesText += QString("Мосты: %1\n").arg(bridgeList.join(", "));
     } else {
         propertiesText += "Мостов нет\n";
@@ -509,27 +456,21 @@ void MainWindow::calculateGraphProperties() {
     // Проверка двудольности
     propertiesText += QString("\nДвудольный: %1\n").arg(graph->isBipartite() ? "Да" : "Нет");
 
-    // 5. Матрица расстояний
+    // 6. Матрица расстояний
     propertiesText += "\n=== Матрица расстояний ===\n";
     QVector<QVector<int>> distMatrix = graph->getDistanceMatrix();
     int n = distMatrix.size();
 
     // Заголовок с номерами вершин
     propertiesText += "    ";
-    for (int j = 0; j < n; ++j) {
-        propertiesText += QString("%1 ").arg(j+1, 3);
-    }
+    for (int j = 0; j < n; ++j) propertiesText += QString("%1 ").arg(j+1, 3);
     propertiesText += "\n";
 
     // Сама матрица
     for (int i = 0; i < n; ++i) {
         propertiesText += QString("%1: ").arg(i+1, 2);
         for (int j = 0; j < n; ++j) {
-            if (distMatrix[i][j] == INT_MAX) {
-                propertiesText += " ∞ ";
-            } else {
-                propertiesText += QString("%1 ").arg(distMatrix[i][j], 3);
-            }
+            propertiesText += (distMatrix[i][j] == INT_MAX) ? " ∞ " : QString("%1 ").arg(distMatrix[i][j], 3);
         }
         propertiesText += "\n";
     }
@@ -542,9 +483,7 @@ void MainWindow::calculateGraphProperties() {
         propertiesText += QString("Граф несвязный (%1 компонент)\n").arg(components.size());
         for (int i = 0; i < components.size(); ++i) {
             QStringList vertices;
-            for (int v : components[i]) {
-                vertices << QString::number(v + 1);
-            }
+            for (int v : components[i]) vertices << QString::number(v + 1);
             propertiesText += QString("Компонента %1: %2\n").arg(i+1).arg(vertices.join(", "));
         }
     }
@@ -552,14 +491,66 @@ void MainWindow::calculateGraphProperties() {
     // Раскраска графа
     QVector<int> colors = graph->greedyColoring();
     int colorsUsed = 0;
-    if (!colors.isEmpty()) {
-        colorsUsed = *std::max_element(colors.begin(), colors.end()) + 1;
-    }
+    if (!colors.isEmpty()) colorsUsed = *std::max_element(colors.begin(), colors.end()) + 1;
     propertiesText += QString("\nХроматическое число (оценка): %1\n").arg(colorsUsed);
 
     graphPropertiesDisplay->setPlainText(propertiesText);
 }
 
+QString MainWindow::traversalToString(const QVector<int>& traversal) {
+    QStringList vertices;
+    for (int v : traversal) vertices << QString::number(v + 1);
+    return vertices.join(" → ");
+}
+
+void MainWindow::saveGraphToImage() {
+    if (!graph || nodes.empty()) return;
+    QString fileName = QFileDialog::getSaveFileName(this, "Сохранить", "", "PNG (*.png);;JPEG (*.jpg)");
+    if (fileName.isEmpty()) return;
+    scene->clearSelection();
+    QRectF sceneRect = scene->itemsBoundingRect().adjusted(-20, -20, 20, 20);
+    QImage image(sceneRect.size().toSize(), QImage::Format_ARGB32);
+    image.fill(Qt::white);
+    QPainter painter(&image);
+    scene->render(&painter, QRectF(), sceneRect);
+    painter.end();
+    image.save(fileName);
+}
+
+void MainWindow::saveGraphToDotFile() {
+    QString fileName = QFileDialog::getSaveFileName(this, "Сохранить DOT", "", "DOT (*.dot)");
+    if (fileName.isEmpty()) return;
+    exportToDotFile(fileName);
+}
+
+void MainWindow::exportToDotFile(const QString& fileName) {
+    QFile file(fileName);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    QTextStream out(&file);
+    out << "graph G {\n    node [shape=circle, style=filled, fillcolor=lightblue];\n";
+    for (int i = 0; i < graph->nodeCount(); ++i) out << QString("    %1 [label=\"%2\"];\n").arg(i+1).arg(i+1);
+    const auto &adjMatrix = graph->adjacencyMatrix();
+    for (int i = 0; i < adjMatrix.size(); ++i) {
+        for (int j = i; j < adjMatrix[i].size(); ++j) {
+            if (adjMatrix[i][j] > 0) out << QString("    %1 -- %2;\n").arg(i+1).arg(j+1);
+        }
+    }
+    out << "}\n";
+    file.close();
+}
+
+void MainWindow::setupMatrixConnections() {
+    connect(cycleButton, &QPushButton::clicked, this, &MainWindow::checkCycles);
+    connect(bipartiteButton, &QPushButton::clicked, this, &MainWindow::checkBipartite);
+    connect(colorButton, &QPushButton::clicked, this, &MainWindow::colorGraph);
+    connect(representationCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onRepresentationChanged);
+    connect(matrixTable, &QTableWidget::cellChanged, this, &MainWindow::onMatrixCellChanged);
+    connect(generateButton, &QPushButton::clicked, this, &MainWindow::onGenerateClicked);
+    connect(calcButton, &QPushButton::clicked, this, &MainWindow::calculateGraphProperties);
+    connect(resizeButton, &QPushButton::clicked, this, &MainWindow::resizeMatrix);
+}
+
+// Работа с таблицей (без изменений)
 void MainWindow::resizeMatrixTable(int rows, int cols) {
     updatingMatrix = true;
     matrixTable->setRowCount(rows);
@@ -645,19 +636,6 @@ bool MainWindow::parseMatrix() {
     else graph->createFromIncidenceMatrix(m);
     statusLabel->setText("Матрица загружена");
     return true;
-}
-
-void MainWindow::checkBipartite() {
-    if (!graph || graph->nodeCount() == 0) return;
-    if (graph->isBipartite()) {
-        QVector<int> colors = graph->bipartiteColoring();
-        for (auto it = nodes.begin(); it != nodes.end(); ++it) {
-            it.value()->setColor(colors[it.key()] == 0 ? Qt::red : Qt::blue);
-        }
-        graphPropertiesDisplay->append("\nГраф двудольный");
-    } else {
-        graphPropertiesDisplay->append("\nГраф не двудольный");
-    }
 }
 
 void MainWindow::onGenerateClicked() {
