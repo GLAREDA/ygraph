@@ -4,8 +4,12 @@
 #include <QStyleOption>
 #include <QGraphicsScene>
 
-Node::Node(int id) : id(id), currentColor(defaultColor)
+// Конструктор
+Node::Node(int id) : id(id)
 {
+    // Инициализируем цвет СРАЗУ конкретным значением, а не ссылкой на другую переменную
+    currentColor = QColor(70, 130, 180);
+
     setFlag(ItemIsMovable);
     setFlag(ItemSendsGeometryChanges);
     setCacheMode(DeviceCoordinateCache);
@@ -23,7 +27,8 @@ void Node::setColor(const QColor &color) {
 }
 
 void Node::resetColor() {
-    currentColor = defaultColor;
+    // Явно задаем стандартный цвет (SteelBlue)
+    currentColor = QColor(70, 130, 180);
     update();
 }
 
@@ -74,6 +79,55 @@ void Node::mousePressEvent(QGraphicsSceneMouseEvent *event) {
 void Node::mouseReleaseEvent(QGraphicsSceneMouseEvent *event) {
     update();
     QGraphicsItem::mouseReleaseEvent(event);
+}
+
+// === ФИЗИКА (FORCE LAYOUT) ===
+void Node::calculateForces()
+{
+    if (!scene() || scene()->mouseGrabberItem() == this) {
+        newPos = pos();
+        return;
+    }
+
+    qreal xvel = 0;
+    qreal yvel = 0;
+
+    // Отталкивание
+    foreach (QGraphicsItem *item, scene()->items()) {
+        Node *node = dynamic_cast<Node *>(item);
+        if (!node) continue;
+
+        QPointF vec = mapToItem(node, 0, 0);
+        qreal dx = vec.x();
+        qreal dy = vec.y();
+        double l = 2.0 * (dx * dx + dy * dy);
+        if (l > 0) {
+            xvel += (dx * 150.0) / l;
+            yvel += (dy * 150.0) / l;
+        }
+    }
+
+    // Притяжение
+    double weight = (edgeList.size() + 1) * 10;
+    for (Edge *edge : edgeList) {
+        QPointF vec;
+        if (edge->sourceNode() == this) vec = mapToItem(edge->destNode(), 0, 0);
+        else vec = mapToItem(edge->sourceNode(), 0, 0);
+        xvel -= vec.x() / weight;
+        yvel -= vec.y() / weight;
+    }
+
+    if (qAbs(xvel) < 0.1 && qAbs(yvel) < 0.1) xvel = yvel = 0;
+
+    QRectF sceneRect = scene()->sceneRect();
+    newPos = pos() + QPointF(xvel, yvel);
+}
+
+bool Node::advancePosition()
+{
+    if (newPos == pos()) return false;
+    setPos(newPos);
+    return true;
 }
 
 QList<Edge *> Node::edges() const { return edgeList; }

@@ -14,7 +14,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Установка Qt 6.5.0 с компилятором MSVC 2019 (совместим с Windows Server 2022)
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
@@ -26,66 +25,40 @@ jobs:
         install-deps: 'true'
         cache: 'true'
 
-    # Настройка окружения Visual Studio (nmake)
     - name: Setup MSVC environment
       uses: ilammy/msvc-dev-cmd@v1
 
-    # Сборка проекта
     - name: Build
       run: |
-        qmake "CONFIG+=release"
+        qmake CONFIG+=release
         nmake
 
-    # Поиск файла, копирование и упаковка DLL
     - name: Deploy (Find and Package)
       shell: powershell
       run: |
-        # Создаем папку dist для готового результата
+        # Создаем папку dist
         New-Item -ItemType Directory -Force -Path dist
         
-        Write-Host "--- SEARCHING FOR EXE ---"
+        # 1. Ищем .exe файл рекурсивно во всех папках (кроме самой dist)
+        # Мы берем первый попавшийся exe, который был создан только что
+        $exeFile = Get-ChildItem -Path . -Filter *.exe -Recurse | Where-Object { $_.DirectoryName -notmatch "dist" -and $_.Name -notmatch "qmake" } | Select-Object -First 1
         
-        # 1. Сначала ищем в папке release (стандартное место Qt)
-        $exeFile = Get-ChildItem -Path "release" -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-        
-        # 2. Если не нашли, ищем в корне проекта (бывает, если в .pro не задан DESTDIR)
-        if (-not $exeFile) {
-            Write-Host "Not found in 'release'. Checking root folder..."
-            $exeFile = Get-ChildItem -Path "." -Filter *.exe -MaxDepth 1 | Where-Object { $_.Name -notmatch "qmake" } | Select-Object -First 1
-        }
-
-        # 3. Логика копирования и деплоя
         if ($exeFile) {
-            Write-Host "SUCCESS: Found exe at $($exeFile.FullName)"
-            
-            # Копируем файл в dist
+            Write-Host "FOUND EXE: $($exeFile.FullName)"
             Copy-Item $exeFile.FullName -Destination dist\
-            
-            # Формируем путь к скопированному файлу
-            $destExe = "dist\$($exeFile.Name)"
-            
-            # Запускаем windeployqt (подтягивает все нужные DLL: Qt6Core, GUI, Widgets и т.д.)
-            Write-Host "Running windeployqt..."
-            windeployqt --release --compiler-runtime --no-translations $destExe
-            
-            # Удаляем мусор, если он случайно скопировался (.obj, .cpp и т.д.)
-            Get-ChildItem -Path dist -Recurse | Where-Object { $_.Extension -in ".obj", ".cpp", ".h", ".exp", ".lib", ".ilk", ".pdb" } | Remove-Item
-            
         } else {
-            Write-Error "BUILD ERROR: Could not find any compiled .exe file!"
-            
-            # --- БЛОК ОТЛАДКИ (Покажет, какие файлы вообще есть, если сборка упадет) ---
-            Write-Host "Listing 'release' directory content:"
-            Get-ChildItem -Path "release" -ErrorAction SilentlyContinue
-            
-            Write-Host "Listing root directory content:"
-            Get-ChildItem -Path "." -MaxDepth 1
-            # ---------------------------------------------------------------------------
-            
+            Write-Error "CRITICAL: .exe file not found after build!"
+            # Выводим список всех файлов, чтобы понять, что пошло не так (для отладки)
+            Get-ChildItem -Recurse
             exit 1
         }
+        
+        # 2. Запускаем windeployqt
+        windeployqt --release --compiler-runtime dist\*.exe
+        
+        # 3. Удаляем лишние файлы (obj, cpp, h), если они случайно попали, оставляем только exe и dll
+        Get-ChildItem -Path dist -Recurse | Where-Object { $_.Extension -in ".obj", ".cpp", ".h", ".exp", ".lib" } | Remove-Item
 
-    # Загрузка архива на GitHub
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
