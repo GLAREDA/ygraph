@@ -24,6 +24,8 @@ public:
     ~MainWindow();
 
 protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
+
 
 private slots:
     void onGenerateClicked();
@@ -38,7 +40,8 @@ private slots:
     void saveGraphToDotFile();
     void visualizeTraversal();
     void visualizeShortestPath();
-     void highlightBridgesAndArticulations();
+    void highlightBridgesAndArticulations();
+    void onRandomGraphClicked();
 
 
 private:
@@ -55,6 +58,9 @@ private:
      void exportToDotFile(const QString& fileName);
      void highlightTraversal(const QVector<int>& traversal, const QColor& color);
      void highlightPath(const QVector<int>& path, const QColor& color);
+   void onPhysicsUpdate();
+
+
 QString traversalToString(const QVector<int>& traversal);
 
 
@@ -78,6 +84,7 @@ QString traversalToString(const QVector<int>& traversal);
     QAction *saveDotAction;
     QPushButton *traversalButton;
     QComboBox *startVertexCombo;
+    QTimer *physicsTimer;
 
 
     Graph *graph;

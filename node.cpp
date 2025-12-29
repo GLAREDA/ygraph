@@ -81,7 +81,6 @@ void Node::mouseReleaseEvent(QGraphicsSceneMouseEvent *event) {
     QGraphicsItem::mouseReleaseEvent(event);
 }
 
-// === ФИЗИКА (FORCE LAYOUT) ===
 void Node::calculateForces()
 {
     if (!scene() || scene()->mouseGrabberItem() == this) {
@@ -92,7 +91,8 @@ void Node::calculateForces()
     qreal xvel = 0;
     qreal yvel = 0;
 
-    // Отталкивание
+    // 1. ОТТАЛКИВАНИЕ (Закон Кулона)
+    // Узлы толкают друг друга.
     foreach (QGraphicsItem *item, scene()->items()) {
         Node *node = dynamic_cast<Node *>(item);
         if (!node) continue;
@@ -101,33 +101,59 @@ void Node::calculateForces()
         qreal dx = vec.x();
         qreal dy = vec.y();
         double l = 2.0 * (dx * dx + dy * dy);
+
         if (l > 0) {
-            xvel += (dx * 150.0) / l;
-            yvel += (dy * 150.0) / l;
+            // КОЭФФИЦИЕНТ: 200.0 (можно уменьшить до 100, если сильно разлетаются)
+            xvel += (dx * 200.0) / l;
+            yvel += (dy * 200.0) / l;
         }
     }
 
-    // Притяжение
-    double weight = (edgeList.size() + 1) * 10;
+    // 2. ПРИТЯЖЕНИЕ РЕБЕР (Закон Гука)
+    // Соединенные узлы стягиваются.
+    double weight = (edgeList.size() + 1) * 40; // Жесткость пружины
+
     for (Edge *edge : edgeList) {
         QPointF vec;
-        if (edge->sourceNode() == this) vec = mapToItem(edge->destNode(), 0, 0);
-        else vec = mapToItem(edge->sourceNode(), 0, 0);
+        if (edge->sourceNode() == this)
+            vec = mapToItem(edge->destNode(), 0, 0);
+        else
+            vec = mapToItem(edge->sourceNode(), 0, 0);
+
         xvel -= vec.x() / weight;
         yvel -= vec.y() / weight;
     }
 
-    if (qAbs(xvel) < 0.1 && qAbs(yvel) < 0.1) xvel = yvel = 0;
+    // 3. ГРАВИТАЦИЯ К ЦЕНТРУ (Центростремительная сила)
+    // Это самая важная часть, чтобы они не улетали в бесконечность.
+    QPointF currentPos = pos();
 
-    QRectF sceneRect = scene()->sceneRect();
+    // Делим на 100.0 (было 2000.0). Чем МЕНЬШЕ число, тем СИЛЬНЕЕ тянет в центр.
+    // Это заставит их держаться вместе.
+    xvel -= currentPos.x() / 200.0;
+    yvel -= currentPos.y() / 200.0;
+
+    // 4. ТРЕНИЕ (Затухание)
+    // Чтобы они не болтались вечно, а успокаивались.
+    // Если сила очень маленькая — обнуляем (остановка).
+    if (qAbs(xvel) < 0.7 && qAbs(yvel) < 0.7) {
+        xvel = yvel = 0;
+    }
+
+    // Применяем силу
     newPos = pos() + QPointF(xvel, yvel);
 }
 
+// === ФИЗИКА: ПРИМЕНЕНИЕ ПОЗИЦИИ ===
 bool Node::advancePosition()
 {
-    if (newPos == pos()) return false;
+    if (newPos == pos())
+        return false; // Узел не сдвинулся
+
     setPos(newPos);
-    return true;
+    return true; // Узел сдвинулся
 }
+
+
 
 QList<Edge *> Node::edges() const { return edgeList; }

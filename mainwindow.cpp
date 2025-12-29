@@ -23,6 +23,10 @@
 #include <QToolBar>
 #include <QAction>
 #include <QTimer>
+#include <QRandomGenerator>
+#include <QWheelEvent> // Не забудьте добавить этот инклюд в начале файла, если его нет!
+
+
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -32,6 +36,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), graph(new Graph()), updatingMatrix(false)
 {
     scene = new QGraphicsScene(this);
+    view = new QGraphicsView(scene);
     view = new QGraphicsView(scene);
 
     // Инициализация UI элементов
@@ -47,6 +52,10 @@ MainWindow::MainWindow(QWidget *parent)
     traversalButton = new QPushButton("Визуализировать обход");
     traversalButton->setFixedHeight(30);
     startVertexCombo = new QComboBox();
+    physicsTimer = new QTimer(this);
+    connect(physicsTimer, &QTimer::timeout, this, &MainWindow::onPhysicsUpdate);
+
+
 
     setupUI();
     setupMatrixConnections();
@@ -55,6 +64,12 @@ MainWindow::MainWindow(QWidget *parent)
     view->setRenderHint(QPainter::SmoothPixmapTransform);
     view->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     view->setDragMode(QGraphicsView::RubberBandDrag);
+    view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    // Устанавливаем фильтр событий на viewport (саму область рисования)
+    view->viewport()->installEventFilter(this);
+    // =============================
+
+    connect(physicsTimer, &QTimer::timeout, this, &MainWindow::onPhysicsUpdate);
 
     setWindowTitle("Редактор графов (Интерактивный)");
     resize(1200, 800);
@@ -142,6 +157,25 @@ void MainWindow::setupUI()
 
     inputLayout->addWidget(statusLabel);
 
+    QPushButton *randomButton = new QPushButton("Случайный граф");
+    randomButton->setFixedHeight(30);
+    connect(randomButton, &QPushButton::clicked, this, &MainWindow::onRandomGraphClicked);
+
+    QPushButton *physicsBtn = new QPushButton("Вкл/Выкл Физику");
+    physicsBtn->setCheckable(true); // Кнопка-переключатель (залипающая)
+    physicsBtn->setFixedHeight(30);
+
+    // Логика: если нажата - запускаем таймер, отжата - останавливаем
+    connect(physicsBtn, &QPushButton::toggled, [=](bool checked){
+        if(checked) physicsTimer->start(30); // 30 мс = ~30 FPS
+        else physicsTimer->stop();
+    });
+
+    inputLayout->addWidget(physicsBtn);
+    // ==========================
+    inputLayout->addWidget(randomButton);
+    inputLayout->addWidget(statusLabel);
+
     // Центральная панель
     QGroupBox *graphGroup = new QGroupBox("Визуализация графа");
     QVBoxLayout *graphLayout = new QVBoxLayout(graphGroup);
@@ -180,21 +214,37 @@ void MainWindow::setupUI()
     onRepresentationChanged(0);
 }
 
+void MainWindow::onPhysicsUpdate() {
+    // Шаг 1: Спросить каждый узел, куда он хочет сдвинуться (расчет сил)
+    for (auto node : nodes) node->calculateForces();
+
+    // Шаг 2: Реально сдвинуть узлы на новые места
+    for (auto node : nodes) node->advancePosition();
+}
+
 void MainWindow::updateGraphView() {
+
     scene->clear();
     nodes.clear();
+
     if (!graph || graph->nodeCount() == 0) return;
 
-    const qreal centerX = view->width() / 2.0;
-    const qreal centerY = view->height() / 2.0;
-    qreal circleRadius = qMin(centerX, centerY) * 0.8;
+    // === ИСПРАВЛЕНИЕ ===
+    // Вместо view->width()/2 ставим 0.
+    // Теперь центром вселенной графа будет математический ноль.
+    const qreal centerX = 0;
+    const qreal centerY = 0;
+
+    // Радиус начального круга можно сделать поменьше
+    qreal circleRadius = 200.0;
+    // ===================
 
     QVector<QPointF> positions;
     for (int i = 0; i < graph->nodeCount(); ++i) {
         qreal angle = 2 * M_PI * i / graph->nodeCount();
         QPointF newPos(centerX + circleRadius * cos(angle), centerY + circleRadius * sin(angle));
 
-        // Разброс, чтобы не слипались
+        // Разброс (оставляем как есть)
         for (const QPointF& pos : positions) {
              if (QLineF(newPos, pos).length() < 60) {
                  circleRadius *= 1.1;
@@ -213,9 +263,7 @@ void MainWindow::updateGraphView() {
     for (int i = 0; i < adjMatrix.size(); ++i) {
         for (int j = i; j < adjMatrix[i].size(); ++j) {
             if (adjMatrix[i][j] > 0 && nodes.contains(i) && nodes.contains(j)) {
-                Node *u = nodes[i];
-                Node *v = nodes[j];
-                Edge *edge = new Edge(u, v, adjMatrix[i][j]);
+                Edge *edge = new Edge(nodes[i], nodes[j], adjMatrix[i][j]);
                 scene->addItem(edge);
             }
         }
@@ -225,6 +273,9 @@ void MainWindow::updateGraphView() {
     for (int i = 0; i < graph->nodeCount(); ++i) {
         startVertexCombo->addItem(QString::number(i+1), i);
     }
+
+    // === ВАЖНО: Направляем камеру в центр (0,0) ===
+    view->centerOn(0, 0);
 }
 
 void MainWindow::resetEdgeColors() {
@@ -662,4 +713,75 @@ void MainWindow::checkBipartite() {
 
 void MainWindow::onGenerateClicked() {
     if (parseMatrix()) updateGraphView();
+}
+
+void MainWindow::onRandomGraphClicked() {
+    bool ok;
+    // 1. Спрашиваем количество вершин (от 2 до 50)
+    int count = QInputDialog::getInt(this, "Генерация",
+                                   "Количество вершин:",
+                                   5, 2, 50, 1, &ok);
+    if (!ok) return;
+
+    // 2. Переключаемся в режим "Матрица смежности" (так проще генерировать)
+    representationCombo->setCurrentIndex(0);
+
+    // 3. Подготавливаем таблицу
+    // (Мы не меняем sizeCombo, так как там фиксированные значения,
+    // просто меняем таблицу напрямую)
+    resizeMatrixTable(count, count);
+
+    // 4. Заполняем случайными числами
+    // Используем вероятность 30% для ребра, иначе граф превратится в кашу
+    int density = 30;
+
+    // Блокируем обновления, чтобы не тормозило при заполнении
+    updatingMatrix = true;
+
+    for (int i = 0; i < count; ++i) {
+        for (int j = i + 1; j < count; ++j) {
+            // Генерируем число от 0 до 99
+            if (QRandomGenerator::global()->bounded(100) < density) {
+                // Ставим единицы симметрично
+                if (auto item1 = matrixTable->item(i, j)) item1->setText("1");
+                if (auto item2 = matrixTable->item(j, i)) item2->setText("1");
+            } else {
+                if (auto item1 = matrixTable->item(i, j)) item1->setText("0");
+                if (auto item2 = matrixTable->item(j, i)) item2->setText("0");
+            }
+        }
+    }
+
+    updatingMatrix = false;
+
+    // 5. Строим граф (вызываем ту же функцию, что и кнопка "Построить")
+    onGenerateClicked();
+
+    // Пишем в статус
+    statusLabel->setText(QString("Сгенерирован граф: %1 вершин").arg(count));
+}
+
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event)
+{
+    // Если событие произошло в окне просмотра (view) и это прокрутка колесика
+    if (obj == view->viewport() && event->type() == QEvent::Wheel) {
+
+        QWheelEvent *wheelEvent = static_cast<QWheelEvent*>(event);
+
+        // Коэффициент зума (1.15 = 15% увеличения)
+        const double scaleFactor = 1.15;
+
+        if (wheelEvent->angleDelta().y() > 0) {
+            // Крутим от себя -> Приближаем
+            view->scale(scaleFactor, scaleFactor);
+        } else {
+            // Крутим на себя -> Отдаляем
+            view->scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+        }
+
+        return true; // Сообщаем Qt, что мы обработали событие (чтобы он не скроллил)
+    }
+
+    return QMainWindow::eventFilter(obj, event);
 }
