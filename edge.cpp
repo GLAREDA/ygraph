@@ -9,6 +9,7 @@ Edge::Edge(Node *sourceNode, Node *destNode, int weight)
     setAcceptedMouseButtons(Qt::NoButton);
     source->addEdge(this);
     dest->addEdge(this);
+    setFlag(ItemIsSelectable);
     adjust();
 }
 

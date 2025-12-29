@@ -739,3 +739,46 @@ void Graph::updateIncidenceMatrix() {
         edgeIndex++;
     }
 }
+
+void Graph::addVertex() {
+    int n = adjMatrix.size();
+    // Добавляем столбец
+    for (int i = 0; i < n; ++i) {
+        adjMatrix[i].append(0);
+    }
+    // Добавляем строку
+    QVector<int> newRow(n + 1, 0);
+    adjMatrix.append(newRow);
+
+    // ВАЖНО: Создаем копию перед обновлением!
+    QVector<QVector<int>> matrixCopy = adjMatrix;
+    createFromAdjacencyMatrix(matrixCopy);
+}
+
+void Graph::removeVertex(int index) {
+    if (index < 0 || index >= adjMatrix.size()) return;
+
+    adjMatrix.removeAt(index);
+    for (int i = 0; i < adjMatrix.size(); ++i) {
+        adjMatrix[i].removeAt(index);
+    }
+
+    // ВАЖНО: Копия
+    QVector<QVector<int>> matrixCopy = adjMatrix;
+    createFromAdjacencyMatrix(matrixCopy);
+}
+
+void Graph::addEdge(int u, int v, int weight) {
+    if (u < 0 || u >= adjMatrix.size() || v < 0 || v >= adjMatrix.size()) return;
+
+    adjMatrix[u][v] = weight;
+    adjMatrix[v][u] = weight;
+
+    // ВАЖНО: Копия
+    QVector<QVector<int>> matrixCopy = adjMatrix;
+    createFromAdjacencyMatrix(matrixCopy);
+}
+
+void Graph::removeEdge(int u, int v) {
+    addEdge(u, v, 0); // addEdge уже делает копию, так что тут менять не надо
+}

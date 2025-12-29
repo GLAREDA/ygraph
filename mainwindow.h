@@ -10,10 +10,15 @@
 #include <QLabel>
 #include <QTextEdit>
 #include <QMap>
-#include "node.h"
-#include "edge.h"
+#include <QTimer>
+#include <QToolBox>
+#include <QCheckBox>
+#include <QPropertyAnimation>
+#include <QParallelAnimationGroup>
 
 class Graph;
+class Node; // Forward declaration
+class QGraphicsLineItem;
 
 class MainWindow : public QMainWindow
 {
@@ -24,11 +29,12 @@ public:
     ~MainWindow();
 
 protected:
+    // Перехватчик событий (для зума и редактора)
     bool eventFilter(QObject *obj, QEvent *event) override;
-
 
 private slots:
     void onGenerateClicked();
+    void onRandomGraphClicked();
     void onRepresentationChanged(int index);
     void calculateGraphProperties();
     void onMatrixCellChanged(int row, int col);
@@ -41,8 +47,8 @@ private slots:
     void visualizeTraversal();
     void visualizeShortestPath();
     void highlightBridgesAndArticulations();
-    void onRandomGraphClicked();
-
+    void onPhysicsUpdate();
+    void applyLayout();
 
 private:
     void setupUI();
@@ -52,43 +58,68 @@ private:
     void resizeMatrixTable(int rows, int cols);
     void updateSymmetricCell(int row, int col);
     void enforceDiagonalZeros();
-    void validateIncidenceMatrix();
+
+    // Вспомогательные функции
     void resetEdgeColors();
+    void stopAndReset(); // Остановка анимаций
+    void clearSelectionState(); // Сброс выделения
+    void rebuildGraphKeepPositions(); // Перестройка с сохранением координат
+    void updateTableFromGraph(); // Синхронизация таблицы
+
+    // Визуализация
     void highlightEdge(int u, int v, const QColor& color);
-     void exportToDotFile(const QString& fileName);
-     void highlightTraversal(const QVector<int>& traversal, const QColor& color);
-     void highlightPath(const QVector<int>& path, const QColor& color);
-   void onPhysicsUpdate();
+    void exportToDotFile(const QString& fileName);
+    void highlightTraversal(const QVector<int>& traversal, const QColor& color);
+    void highlightPath(const QVector<int>& path, const QColor& color);
+    QString traversalToString(const QVector<int>& traversal);
 
-
-QString traversalToString(const QVector<int>& traversal);
-
-
+    // Графика
     QGraphicsScene *scene;
     QGraphicsView *view;
+
+    QCheckBox *useAnimationCheckbox;
+
+    // Данные
+    QMap<int, Node*> nodes;
+    Graph *graph;
+    long long graphGeneration; // Защита от багов анимации
+
+    // UI
     QTableWidget *matrixTable;
     QPushButton *generateButton;
     QPushButton *calcButton;
     QPushButton *resizeButton;
-    QComboBox *representationCombo;
-    QComboBox *sizeCombo;
-    QLabel *statusLabel;
-    QTextEdit *graphPropertiesDisplay;
-    QLabel *hintLabel;
-    QMap<int, Node*> nodes;
     QPushButton *colorButton;
     QPushButton *bipartiteButton;
     QPushButton *cycleButton;
+    QPushButton *traversalButton;
+    QPushButton *editModeBtn;
+
+    QComboBox *representationCombo;
+    QComboBox *sizeCombo;
+    QComboBox *startVertexCombo;
+    QComboBox *layoutCombo;
+
+    QLabel *statusLabel;
+    QLabel *hintLabel;
+    QTextEdit *graphPropertiesDisplay;
     QToolBar *exportToolBar;
     QAction *saveImageAction;
     QAction *saveDotAction;
-    QPushButton *traversalButton;
-    QComboBox *startVertexCombo;
+
+    bool updatingMatrix;
+
+    // Таймеры
+    QTimer *animationTimer;
     QTimer *physicsTimer;
 
+    // Редактор
+    bool isEditMode;
+    Node *selectedNode; // Текущий выделенный узел
 
-    Graph *graph;
-    bool updatingMatrix;
+    // Временные (не используются в текущей логике, но оставим для совместимости)
+    QGraphicsLineItem *tempLine;
+    Node *tempSourceNode;
 };
 
 #endif // MAINWINDOW_H

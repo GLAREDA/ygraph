@@ -1,15 +1,18 @@
 #ifndef NODE_H
 #define NODE_H
 
-#include <QGraphicsItem>
+#include <QGraphicsObject> // <--- БЫЛО QGraphicsItem
 #include <QList>
 #include <QBrush>
-#include <QColor> // Добавлено
+#include <QColor>
 
 class Edge;
 
-class Node : public QGraphicsItem
+// Наследуемся от QGraphicsObject для поддержки анимации
+class Node : public QGraphicsObject
 {
+    Q_OBJECT // <--- ОБЯЗАТЕЛЬНО для анимации
+
 public:
     Node(int id);
 
@@ -17,11 +20,9 @@ public:
     QList<Edge *> edges() const;
     int getId() const { return id; }
 
-    // Управление цветом
     void setColor(const QColor &color);
-    void resetColor(); // Сброс к синему
+    void resetColor();
 
-    // Физика
     void calculateForces();
     bool advancePosition();
 
@@ -39,8 +40,8 @@ protected:
 private:
     QList<Edge *> edgeList;
     int id;
-    QColor currentColor; // Текущий цвет
-    QPointF newPos;      // Для физики
+    QColor currentColor;
+    QPointF newPos;
 };
 
 #endif // NODE_H
