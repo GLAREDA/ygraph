@@ -17,6 +17,11 @@ public:
     void clear();
     void createFromAdjacencyMatrix(const QVector<QVector<int>>& matrix);
     void createFromIncidenceMatrix(const QVector<QVector<int>>& matrix);
+    // Динамическое редактирование
+    void addVertex();
+    void removeVertex(int index);
+    void addEdge(int u, int v, int weight = 1);
+    void removeEdge(int u, int v);
 
     const QVector<QVector<int>>& adjacencyMatrix() const;
     const QVector<QVector<int>>& incidenceMatrix() const;

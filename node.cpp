@@ -13,6 +13,7 @@ Node::Node(int id) : id(id)
     setFlag(ItemIsMovable);
     setFlag(ItemSendsGeometryChanges);
     setCacheMode(DeviceCoordinateCache);
+    setFlag(ItemIsSelectable);
     setZValue(1);
 }
 
