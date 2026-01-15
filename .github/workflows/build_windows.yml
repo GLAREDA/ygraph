@@ -2,7 +2,7 @@ name: Windows Build
 
 on:
   push:
-    branches: [ "main", "master", "fixed-edges", "interactive-viz" ]
+    branches: [ "main", "master", "fixed-edges", "ini-config" ]
   pull_request:
     branches: [ "main", "master" ]
 
