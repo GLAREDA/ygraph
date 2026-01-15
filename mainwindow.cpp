@@ -33,6 +33,8 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), graph(new Graph()), updatingMatrix(false)
 {
+    qDebug() << "APP: Запуск программы";
+
     // === ИНИЦИАЛИЗАЦИЯ ===
     animationTimer = nullptr;
     physicsTimer = new QTimer(this);
@@ -68,9 +70,8 @@ MainWindow::MainWindow(QWidget *parent)
     view->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     view->setDragMode(QGraphicsView::RubberBandDrag);
     view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-    view->viewport()->installEventFilter(this); // Включаем перехват событий
-    view->setFocusPolicy(Qt::StrongFocus);
-
+    view->viewport()->installEventFilter(this);
+    view->setFocusPolicy(Qt::StrongFocus); // Важно для клавиатуры
 
     connect(physicsTimer, &QTimer::timeout, this, &MainWindow::onPhysicsUpdate);
 
@@ -82,22 +83,18 @@ MainWindow::~MainWindow()
 {
     stopAndReset();
     delete graph;
+    qDebug() << "APP: Завершение работы";
 }
 
 // === ЯДЕРНАЯ ФУНКЦИЯ ОЧИСТКИ ===
 void MainWindow::stopAndReset() {
-    // 1. Убиваем таймер анимации
     if (animationTimer) {
         animationTimer->disconnect();
         if (animationTimer->isActive()) animationTimer->stop();
         delete animationTimer;
         animationTimer = nullptr;
     }
-
-    // 2. Сбрасываем выделение
     clearSelectionState();
-
-    // 3. Сбрасываем цвета
     resetEdgeColors();
 }
 
@@ -120,16 +117,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         return true;
     }
 
-    // Если не режим редактирования - выходим
     if (!isEditMode) return QMainWindow::eventFilter(obj, event);
 
     // 2. КЛИКИ МЫШКИ
     if (obj == view->viewport() && event->type() == QEvent::MouseButtonPress) {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
         if (mouseEvent->button() == Qt::LeftButton) {
-
-            // Забираем фокус (чтобы клавиатура заработала)
-            view->setFocus();
+            view->setFocus(); // Забираем фокус для клавиатуры
 
             QPointF scenePos = view->mapToScene(mouseEvent->pos());
             QGraphicsItem *item = scene->itemAt(scenePos, QTransform());
@@ -139,12 +133,17 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                     selectedNode = clickedNode;
                     selectedNode->setColor(Qt::green);
                     statusLabel->setText(QString("Выделен узел %1.").arg(clickedNode->getId() + 1));
+                    qDebug() << "EDIT: Selected node" << clickedNode->getId();
                 }
                 else if (selectedNode == clickedNode) {
                     clearSelectionState();
                     statusLabel->setText("Выделение снято");
+                    qDebug() << "EDIT: Deselected node";
                 }
                 else {
+                    // Создание ребра
+                    saveToHistory(); // <-- Сохраняем перед изменением
+                    qDebug() << "EDIT: Added edge" << selectedNode->getId() << "->" << clickedNode->getId();
                     graph->addEdge(selectedNode->getId(), clickedNode->getId());
                     rebuildGraphKeepPositions();
                     statusLabel->setText("Связь создана");
@@ -158,50 +157,49 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         }
     }
 
-    // 3. ДВОЙНОЙ КЛИК
+    // 3. ДВОЙНОЙ КЛИК (Добавление)
     if (obj == view->viewport() && event->type() == QEvent::MouseButtonDblClick) {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
         QPointF scenePos = view->mapToScene(mouseEvent->pos());
         if (!scene->itemAt(scenePos, QTransform())) {
+            saveToHistory(); // <-- Сохраняем
+            qDebug() << "EDIT: Added vertex";
             graph->addVertex();
             rebuildGraphKeepPositions();
+
+            // Ставим новый узел под курсор
             int lastIdx = graph->nodeCount() - 1;
             if (nodes.contains(lastIdx)) nodes[lastIdx]->setPos(scenePos);
             return true;
         }
     }
 
-    // 4. УДАЛЕНИЕ (ИСПРАВЛЕНО)
+    // 4. УДАЛЕНИЕ (Клавиша)
     if (event->type() == QEvent::KeyPress) {
         QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
-
-        // Отладка: если работает, вы увидите это в консоли Qt Creator "Application Output"
-        // qDebug() << "Key Pressed:" << keyEvent->key();
-
-        // Проверяем Delete (код 16777223) ИЛИ Backspace (код 16777219)
         if (keyEvent->key() == Qt::Key_Delete || keyEvent->key() == Qt::Key_Backspace) {
 
-            // А. Удаляем ЗЕЛЕНЫЙ (выбранный кликом) узел
+            // Удаление узла
             if (selectedNode) {
+                saveToHistory(); // <-- ИСПРАВЛЕНО: Сохраняем перед удалением
                 int id = selectedNode->getId();
+                qDebug() << "EDIT: Removing vertex ID:" << id;
+
                 clearSelectionState();
                 graph->removeVertex(id);
-                rebuildGraphKeepPositions();
+
+                // Передаем ID удаленного узла, чтобы правильно сдвинуть позиции
+                rebuildGraphKeepPositions(id);
+
                 statusLabel->setText("Узел удален");
                 return true;
             }
 
-            // Б. Удаляем то, что выделено рамкой (RubberBand)
+            // Удаление ребра
             if (!scene->selectedItems().isEmpty()) {
-                QGraphicsItem *item = scene->selectedItems().first();
-
-                if (Node *node = dynamic_cast<Node*>(item)) {
-                    graph->removeVertex(node->getId());
-                    rebuildGraphKeepPositions();
-                    statusLabel->setText("Узел удален");
-                    return true;
-                }
-                else if (Edge *edge = dynamic_cast<Edge*>(item)) {
+                if (Edge *edge = dynamic_cast<Edge*>(scene->selectedItems().first())) {
+                    saveToHistory(); // <-- Сохраняем
+                    qDebug() << "EDIT: Removing edge";
                     graph->removeEdge(edge->sourceNode()->getId(), edge->destNode()->getId());
                     rebuildGraphKeepPositions();
                     statusLabel->setText("Ребро удалено");
@@ -226,7 +224,7 @@ void MainWindow::setupUI()
     QWidget *pageData = new QWidget();
     QVBoxLayout *layoutData = new QVBoxLayout(pageData);
 
-    // 1. Кнопка РЕДАКТОРА
+    // Кнопка режима редактирования
     editModeBtn = new QPushButton("Режим редактирования: ВЫКЛ");
     editModeBtn->setCheckable(true);
     editModeBtn->setStyleSheet("background-color: #ffcccb; font-weight: bold; padding: 5px;");
@@ -250,22 +248,35 @@ void MainWindow::setupUI()
     });
     layoutData->addWidget(editModeBtn);
 
+    // Кнопка удаления
     QPushButton *deleteBtn = new QPushButton("Удалить выделенное (или Del)");
     deleteBtn->setStyleSheet("background-color: #ff9999; padding: 3px;");
     connect(deleteBtn, &QPushButton::clicked, [=](){
         if (selectedNode) {
+             saveToHistory(); // Сохраняем перед удалением
              int id = selectedNode->getId();
              clearSelectionState();
              graph->removeVertex(id);
-             rebuildGraphKeepPositions();
+             rebuildGraphKeepPositions(id); // Удаляем с учетом сдвига индексов
              statusLabel->setText("Узел удален");
         }
     });
     layoutData->addWidget(deleteBtn);
+    layoutData->addSpacing(10);
 
-    layoutData->addSpacing(10); // Отступ для красоты
+    // Галочка Ориентированный
+    directedCheck = new QCheckBox("Ориентированный граф");
+    directedCheck->setChecked(false);
+    connect(directedCheck, &QCheckBox::toggled, [=](bool checked){
+        saveToHistory();
+        graph->setDirected(checked);
+        updateGraphView();
+        updateTableFromGraph();
+        if(representationCombo->currentIndex()==1) onRepresentationChanged(1); // Обновить подсказку
+    });
+    layoutData->addWidget(directedCheck);
 
-    // 2. Генерация и Настройки (Вернул Random кнопку сюда)
+    // Настройки матрицы
     representationCombo->addItem("Матрица смежности");
     representationCombo->addItem("Матрица инцидентности");
 
@@ -278,21 +289,13 @@ void MainWindow::setupUI()
     sizeLayout->addWidget(resizeButton);
 
     layoutData->addWidget(new QLabel("Параметры матрицы:"));
-    directedCheck = new QCheckBox("Ориентированный граф");
-    directedCheck->setChecked(false);
-    // При переключении меняем свойство графа и перерисовываем
-    connect(directedCheck, &QCheckBox::toggled, [=](bool checked){
-        graph->setDirected(checked);
-        updateGraphView(); // Перерисовка, чтобы появились/исчезли стрелки
-    });
-    layoutData->addWidget(directedCheck);
     layoutData->addWidget(representationCombo);
     layoutData->addLayout(sizeLayout);
 
+    // Кнопка Случайный граф (над таблицей)
     QPushButton *randomButton = new QPushButton("Случайный граф");
     connect(randomButton, &QPushButton::clicked, this, &MainWindow::onRandomGraphClicked);
     layoutData->addWidget(randomButton);
-    // ===============================================
 
     layoutData->addWidget(new QLabel("Таблица:"));
 
@@ -330,14 +333,12 @@ void MainWindow::setupUI()
     layoutAlgo->addWidget(new QLabel("<b>Вычисления:</b>"));
     layoutAlgo->addWidget(colorButton);
     layoutAlgo->addWidget(pathButton);
-
     layoutAlgo->addWidget(new QLabel("<b>Обходы:</b>"));
     QHBoxLayout *travLayout = new QHBoxLayout();
     travLayout->addWidget(new QLabel("Start:"));
     travLayout->addWidget(startVertexCombo);
     layoutAlgo->addLayout(travLayout);
     layoutAlgo->addWidget(traversalButton);
-
     layoutAlgo->addStretch();
     toolsPanel->addItem(pageAlgo, "2. Алгоритмы");
 
@@ -355,7 +356,7 @@ void MainWindow::setupUI()
     layoutCombo->addItem("Случайная (Random)");
 
     useAnimationCheckbox = new QCheckBox("Плавная анимация");
-    useAnimationCheckbox->setChecked(true); // Включено по умолчанию
+    useAnimationCheckbox->setChecked(true);
 
     QPushButton *applyLayoutBtn = new QPushButton("Применить шаблон");
     connect(applyLayoutBtn, &QPushButton::clicked, this, &MainWindow::applyLayout);
@@ -364,11 +365,13 @@ void MainWindow::setupUI()
     layoutView->addSpacing(20);
     layoutView->addWidget(new QLabel("Шаблоны:"));
     layoutView->addWidget(layoutCombo);
-    layoutView->addWidget(useAnimationCheckbox);
+    layoutView->addWidget(useAnimationCheckbox); // Добавили галочку
     layoutView->addWidget(applyLayoutBtn);
     layoutView->addStretch();
+
     toolsPanel->addItem(pageView, "3. Вид и Физика");
 
+    // СБОРКА ОКОН
     QGroupBox *graphGroup = new QGroupBox("Граф");
     QVBoxLayout *graphLayout = new QVBoxLayout(graphGroup);
     graphLayout->addWidget(view);
@@ -385,6 +388,7 @@ void MainWindow::setupUI()
 
     setCentralWidget(centralWidget);
 
+    // ТУЛБАР
     exportToolBar = new QToolBar("Экспорт", this);
     saveImageAction = new QAction("IMG", this);
     saveDotAction = new QAction("DOT", this);
@@ -395,6 +399,13 @@ void MainWindow::setupUI()
     connect(saveImageAction, &QAction::triggered, this, &MainWindow::saveGraphToImage);
     connect(saveDotAction, &QAction::triggered, this, &MainWindow::saveGraphToDotFile);
     connect(traversalButton, &QPushButton::clicked, this, &MainWindow::visualizeTraversal);
+
+    // ШОРТКАТЫ
+    QShortcut *undoShortcut = new QShortcut(QKeySequence("Ctrl+Z"), this);
+    connect(undoShortcut, &QShortcut::activated, this, &MainWindow::undo);
+
+    QShortcut *redoShortcut = new QShortcut(QKeySequence("Ctrl+Shift+Z"), this);
+    connect(redoShortcut, &QShortcut::activated, this, &MainWindow::redo);
 }
 
 void MainWindow::updateGraphView() {
@@ -430,17 +441,12 @@ void MainWindow::updateGraphView() {
     }
 
     const auto &adjMatrix = graph->adjacencyMatrix();
-    bool isDirected = graph->getDirected(); // Узнаем тип графа
+    bool isDirected = graph->getDirected();
 
     for (int i = 0; i < adjMatrix.size(); ++i) {
-        // Если граф ориентированный - бежим по всем.
-        // Если нет - только j >= i (чтобы не рисовать линию дважды)
         int startJ = isDirected ? 0 : i;
-
         for (int j = startJ; j < adjMatrix[i].size(); ++j) {
             if (adjMatrix[i][j] > 0 && nodes.contains(i) && nodes.contains(j)) {
-
-                // Передаем флаг isDirected в конструктор Edge
                 Edge *edge = new Edge(nodes[i], nodes[j], adjMatrix[i][j], isDirected);
                 scene->addItem(edge);
             }
@@ -452,22 +458,39 @@ void MainWindow::updateGraphView() {
         startVertexCombo->addItem(QString::number(i+1), i);
     }
 
-    // Центрируем
     view->centerOn(0,0);
 }
 
-void MainWindow::rebuildGraphKeepPositions() {
+void MainWindow::rebuildGraphKeepPositions(int removedId) {
+    qDebug() << "VIEW: Перестройка с сохранением позиций. Удален ID:" << removedId;
+
+    // 1. Сохраняем текущие позиции
     QVector<QPointF> oldPositions;
     for (int i = 0; i < nodes.size(); ++i) {
         if (nodes.contains(i)) oldPositions.append(nodes[i]->pos());
         else oldPositions.append(QPointF(0,0));
     }
 
+    // 2. Строим новый граф
     updateGraphView();
     updateTableFromGraph();
 
-    for (int i = 0; i < qMin(nodes.size(), oldPositions.size()); ++i) {
-        if (nodes.contains(i)) nodes[i]->setPos(oldPositions[i]);
+    // 3. Восстанавливаем позиции УМНО (сдвигая индексы)
+    int oldIdx = 0;
+    int newNodesCount = nodes.size();
+
+    for (int newIdx = 0; newIdx < newNodesCount; ++newIdx) {
+        // Если этот индекс был удален в старом массиве, пропускаем его позицию
+        if (oldIdx == removedId) {
+            oldIdx++;
+        }
+
+        // Берем позицию из старого массива
+        if (oldIdx < oldPositions.size() && nodes.contains(newIdx)) {
+            nodes[newIdx]->setPos(oldPositions[oldIdx]);
+        }
+
+        oldIdx++;
     }
 }
 
@@ -475,16 +498,13 @@ void MainWindow::updateTableFromGraph() {
     if (!graph) return;
     updatingMatrix = true;
 
-    // 1. Узнаем, что хочет пользователь
     bool showIncidence = (representationCombo->currentIndex() == 1);
 
     if (showIncidence) {
-        // --- РЕЖИМ ИНЦИДЕНТНОСТИ ---
         const auto& matrix = graph->incidenceMatrix();
         int rows = matrix.size();
         int cols = (rows > 0) ? matrix[0].size() : 0;
 
-        // Обновляем размер комбобокса вершин
         if (sizeCombo->findData(rows) == -1) sizeCombo->addItem(QString("%1x%1").arg(rows), rows);
         sizeCombo->setCurrentIndex(sizeCombo->findData(rows));
 
@@ -501,13 +521,7 @@ void MainWindow::updateTableFromGraph() {
                 matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
             }
         }
-        // Заголовки столбцов: e1, e2, e3...
-        QStringList headers;
-        for(int j=0; j<cols; ++j) headers << QString("e%1").arg(j+1);
-        matrixTable->setHorizontalHeaderLabels(headers);
-
     } else {
-        // --- РЕЖИМ СМЕЖНОСТИ (Старый код) ---
         const auto& matrix = graph->adjacencyMatrix();
         int n = matrix.size();
 
@@ -527,12 +541,7 @@ void MainWindow::updateTableFromGraph() {
                 matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
             }
         }
-        // Заголовки столбцов: 1, 2, 3...
-        QStringList headers;
-        for(int j=0; j<n; ++j) headers << QString::number(j+1);
-        matrixTable->setHorizontalHeaderLabels(headers);
-
-        enforceDiagonalZeros();
+        if (representationCombo->currentIndex() == 0) enforceDiagonalZeros();
     }
 
     updatingMatrix = false;
@@ -710,6 +719,8 @@ void MainWindow::onRandomGraphClicked() {
     representationCombo->setCurrentIndex(0); // Матрица смежности
     resizeMatrixTable(count, count);
     updatingMatrix = true;
+
+    saveToHistory();
 
     // Очистка
     for(int i=0; i<count; ++i)
@@ -1056,6 +1067,7 @@ void MainWindow::onMatrixCellChanged(int row, int col) {
         }
     }
 }
+
 void MainWindow::onRepresentationChanged(int index) {
     int s = sizeCombo->currentData().toInt();
     if (index == 0) resizeMatrixTable(s, s);
@@ -1112,5 +1124,74 @@ bool MainWindow::parseMatrix() {
 }
 
 void MainWindow::onGenerateClicked() {
+    saveToHistory();
     if (parseMatrix()) updateGraphView();
+}
+
+// === ИСТОРИЯ (UNDO/REDO) ===
+
+
+void MainWindow::saveToHistory() {
+    qDebug() << "HISTORY: Сохранение состояния...";
+    GraphState state;
+    state.matrix = graph->adjacencyMatrix();
+    state.isDirected = graph->getDirected();
+
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) {
+        state.positions.insert(it.key(), it.value()->pos());
+    }
+
+    undoStack.push(state);
+    redoStack.clear();
+
+    if (undoStack.size() > 50) undoStack.removeFirst();
+}
+
+void MainWindow::restoreState(const GraphState &state) {
+    qDebug() << "HISTORY: Восстановление...";
+    stopAndReset();
+
+    graph->setDirected(state.isDirected);
+    if (directedCheck) directedCheck->setChecked(state.isDirected);
+
+    graph->createFromAdjacencyMatrix(state.matrix);
+
+    updateGraphView();
+    updateTableFromGraph();
+
+    for(auto it = state.positions.begin(); it != state.positions.end(); ++it) {
+        int id = it.key();
+        if (nodes.contains(id)) {
+            nodes[id]->setPos(it.value());
+        }
+    }
+}
+
+void MainWindow::undo() {
+    if (undoStack.isEmpty()) {
+        qDebug() << "HISTORY: Стек пуст";
+        return;
+    }
+
+    GraphState currentState;
+    currentState.matrix = graph->adjacencyMatrix();
+    currentState.isDirected = graph->getDirected();
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) currentState.positions.insert(it.key(), it.value()->pos());
+    redoStack.push(currentState);
+
+    GraphState prevState = undoStack.pop();
+    restoreState(prevState);
+}
+
+void MainWindow::redo() {
+    if (redoStack.isEmpty()) return;
+
+    GraphState currentState;
+    currentState.matrix = graph->adjacencyMatrix();
+    currentState.isDirected = graph->getDirected();
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) currentState.positions.insert(it.key(), it.value()->pos());
+    undoStack.push(currentState);
+
+    GraphState nextState = redoStack.pop();
+    restoreState(nextState);
 }

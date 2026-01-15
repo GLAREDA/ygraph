@@ -15,10 +15,20 @@
 #include <QCheckBox>
 #include <QPropertyAnimation>
 #include <QParallelAnimationGroup>
+#include <QStack>
+#include <QDateTime>
+#include <QDockWidget>
+#include <QShortcut>
 
 class Graph;
 class Node; // Forward declaration
 class QGraphicsLineItem;
+
+struct GraphState {
+    QVector<QVector<int>> matrix; // Связи
+    bool isDirected;              // Тип
+    QMap<int, QPointF> positions; // Координаты узлов
+};
 
 class MainWindow : public QMainWindow
 {
@@ -49,6 +59,8 @@ private slots:
     void highlightBridgesAndArticulations();
     void onPhysicsUpdate();
     void applyLayout();
+    void undo();
+    void redo();
 
 private:
     void setupUI();
@@ -58,12 +70,14 @@ private:
     void resizeMatrixTable(int rows, int cols);
     void updateSymmetricCell(int row, int col);
     void enforceDiagonalZeros();
+    void saveToHistory();
+    void restoreState(const GraphState &state);
 
     // Вспомогательные функции
     void resetEdgeColors();
     void stopAndReset(); // Остановка анимаций
     void clearSelectionState(); // Сброс выделения
-    void rebuildGraphKeepPositions(); // Перестройка с сохранением координат
+    void rebuildGraphKeepPositions(int removedId = -1); // Добавлен аргумент по умолчанию
     void updateTableFromGraph(); // Синхронизация таблицы
 
     // Визуализация
@@ -99,6 +113,10 @@ private:
     QComboBox *sizeCombo;
     QComboBox *startVertexCombo;
     QComboBox *layoutCombo;
+
+    // История
+    QStack<GraphState> undoStack;
+    QStack<GraphState> redoStack;
 
     QLabel *statusLabel;
     QLabel *hintLabel;
