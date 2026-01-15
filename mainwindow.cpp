@@ -33,6 +33,8 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), graph(new Graph()), updatingMatrix(false)
 {
+    qDebug() << "APP: Запуск программы";
+
     // === ИНИЦИАЛИЗАЦИЯ ===
     animationTimer = nullptr;
     physicsTimer = new QTimer(this);
@@ -68,9 +70,8 @@ MainWindow::MainWindow(QWidget *parent)
     view->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     view->setDragMode(QGraphicsView::RubberBandDrag);
     view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-    view->viewport()->installEventFilter(this); // Включаем перехват событий
-    view->setFocusPolicy(Qt::StrongFocus);
-
+    view->viewport()->installEventFilter(this);
+    view->setFocusPolicy(Qt::StrongFocus); // Важно для клавиатуры
 
     connect(physicsTimer, &QTimer::timeout, this, &MainWindow::onPhysicsUpdate);
 
@@ -82,22 +83,18 @@ MainWindow::~MainWindow()
 {
     stopAndReset();
     delete graph;
+    qDebug() << "APP: Завершение работы";
 }
 
 // === ЯДЕРНАЯ ФУНКЦИЯ ОЧИСТКИ ===
 void MainWindow::stopAndReset() {
-    // 1. Убиваем таймер анимации
     if (animationTimer) {
         animationTimer->disconnect();
         if (animationTimer->isActive()) animationTimer->stop();
         delete animationTimer;
         animationTimer = nullptr;
     }
-
-    // 2. Сбрасываем выделение
     clearSelectionState();
-
-    // 3. Сбрасываем цвета
     resetEdgeColors();
 }
 
@@ -120,16 +117,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         return true;
     }
 
-    // Если не режим редактирования - выходим
     if (!isEditMode) return QMainWindow::eventFilter(obj, event);
 
     // 2. КЛИКИ МЫШКИ
     if (obj == view->viewport() && event->type() == QEvent::MouseButtonPress) {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
         if (mouseEvent->button() == Qt::LeftButton) {
-
-            // Забираем фокус (чтобы клавиатура заработала)
-            view->setFocus();
+            view->setFocus(); // Забираем фокус для клавиатуры
 
             QPointF scenePos = view->mapToScene(mouseEvent->pos());
             QGraphicsItem *item = scene->itemAt(scenePos, QTransform());
@@ -139,12 +133,17 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                     selectedNode = clickedNode;
                     selectedNode->setColor(Qt::green);
                     statusLabel->setText(QString("Выделен узел %1.").arg(clickedNode->getId() + 1));
+                    qDebug() << "EDIT: Selected node" << clickedNode->getId();
                 }
                 else if (selectedNode == clickedNode) {
                     clearSelectionState();
                     statusLabel->setText("Выделение снято");
+                    qDebug() << "EDIT: Deselected node";
                 }
                 else {
+                    // Создание ребра
+                    saveToHistory(); // <-- Сохраняем перед изменением
+                    qDebug() << "EDIT: Added edge" << selectedNode->getId() << "->" << clickedNode->getId();
                     graph->addEdge(selectedNode->getId(), clickedNode->getId());
                     rebuildGraphKeepPositions();
                     statusLabel->setText("Связь создана");
@@ -158,50 +157,49 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         }
     }
 
-    // 3. ДВОЙНОЙ КЛИК
+    // 3. ДВОЙНОЙ КЛИК (Добавление)
     if (obj == view->viewport() && event->type() == QEvent::MouseButtonDblClick) {
         QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
         QPointF scenePos = view->mapToScene(mouseEvent->pos());
         if (!scene->itemAt(scenePos, QTransform())) {
+            saveToHistory(); // <-- Сохраняем
+            qDebug() << "EDIT: Added vertex";
             graph->addVertex();
             rebuildGraphKeepPositions();
+
+            // Ставим новый узел под курсор
             int lastIdx = graph->nodeCount() - 1;
             if (nodes.contains(lastIdx)) nodes[lastIdx]->setPos(scenePos);
             return true;
         }
     }
 
-    // 4. УДАЛЕНИЕ (ИСПРАВЛЕНО)
+    // 4. УДАЛЕНИЕ (Клавиша)
     if (event->type() == QEvent::KeyPress) {
         QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
-
-        // Отладка: если работает, вы увидите это в консоли Qt Creator "Application Output"
-        // qDebug() << "Key Pressed:" << keyEvent->key();
-
-        // Проверяем Delete (код 16777223) ИЛИ Backspace (код 16777219)
         if (keyEvent->key() == Qt::Key_Delete || keyEvent->key() == Qt::Key_Backspace) {
 
-            // А. Удаляем ЗЕЛЕНЫЙ (выбранный кликом) узел
+            // Удаление узла
             if (selectedNode) {
+                saveToHistory(); // <-- ИСПРАВЛЕНО: Сохраняем перед удалением
                 int id = selectedNode->getId();
+                qDebug() << "EDIT: Removing vertex ID:" << id;
+
                 clearSelectionState();
                 graph->removeVertex(id);
-                rebuildGraphKeepPositions();
+
+                // Передаем ID удаленного узла, чтобы правильно сдвинуть позиции
+                rebuildGraphKeepPositions(id);
+
                 statusLabel->setText("Узел удален");
                 return true;
             }
 
-            // Б. Удаляем то, что выделено рамкой (RubberBand)
+            // Удаление ребра
             if (!scene->selectedItems().isEmpty()) {
-                QGraphicsItem *item = scene->selectedItems().first();
-
-                if (Node *node = dynamic_cast<Node*>(item)) {
-                    graph->removeVertex(node->getId());
-                    rebuildGraphKeepPositions();
-                    statusLabel->setText("Узел удален");
-                    return true;
-                }
-                else if (Edge *edge = dynamic_cast<Edge*>(item)) {
+                if (Edge *edge = dynamic_cast<Edge*>(scene->selectedItems().first())) {
+                    saveToHistory(); // <-- Сохраняем
+                    qDebug() << "EDIT: Removing edge";
                     graph->removeEdge(edge->sourceNode()->getId(), edge->destNode()->getId());
                     rebuildGraphKeepPositions();
                     statusLabel->setText("Ребро удалено");
@@ -226,7 +224,7 @@ void MainWindow::setupUI()
     QWidget *pageData = new QWidget();
     QVBoxLayout *layoutData = new QVBoxLayout(pageData);
 
-    // 1. Кнопка РЕДАКТОРА
+    // Кнопка режима редактирования
     editModeBtn = new QPushButton("Режим редактирования: ВЫКЛ");
     editModeBtn->setCheckable(true);
     editModeBtn->setStyleSheet("background-color: #ffcccb; font-weight: bold; padding: 5px;");
@@ -250,22 +248,35 @@ void MainWindow::setupUI()
     });
     layoutData->addWidget(editModeBtn);
 
+    // Кнопка удаления
     QPushButton *deleteBtn = new QPushButton("Удалить выделенное (или Del)");
     deleteBtn->setStyleSheet("background-color: #ff9999; padding: 3px;");
     connect(deleteBtn, &QPushButton::clicked, [=](){
         if (selectedNode) {
+             saveToHistory(); // Сохраняем перед удалением
              int id = selectedNode->getId();
              clearSelectionState();
              graph->removeVertex(id);
-             rebuildGraphKeepPositions();
+             rebuildGraphKeepPositions(id); // Удаляем с учетом сдвига индексов
              statusLabel->setText("Узел удален");
         }
     });
     layoutData->addWidget(deleteBtn);
+    layoutData->addSpacing(10);
 
-    layoutData->addSpacing(10); // Отступ для красоты
+    // Галочка Ориентированный
+    directedCheck = new QCheckBox("Ориентированный граф");
+    directedCheck->setChecked(false);
+    connect(directedCheck, &QCheckBox::toggled, [=](bool checked){
+        saveToHistory();
+        graph->setDirected(checked);
+        updateGraphView();
+        updateTableFromGraph();
+        if(representationCombo->currentIndex()==1) onRepresentationChanged(1); // Обновить подсказку
+    });
+    layoutData->addWidget(directedCheck);
 
-    // 2. Генерация и Настройки (Вернул Random кнопку сюда)
+    // Настройки матрицы
     representationCombo->addItem("Матрица смежности");
     representationCombo->addItem("Матрица инцидентности");
 
@@ -281,10 +292,10 @@ void MainWindow::setupUI()
     layoutData->addWidget(representationCombo);
     layoutData->addLayout(sizeLayout);
 
+    // Кнопка Случайный граф (над таблицей)
     QPushButton *randomButton = new QPushButton("Случайный граф");
     connect(randomButton, &QPushButton::clicked, this, &MainWindow::onRandomGraphClicked);
     layoutData->addWidget(randomButton);
-    // ===============================================
 
     layoutData->addWidget(new QLabel("Таблица:"));
 
@@ -322,14 +333,12 @@ void MainWindow::setupUI()
     layoutAlgo->addWidget(new QLabel("<b>Вычисления:</b>"));
     layoutAlgo->addWidget(colorButton);
     layoutAlgo->addWidget(pathButton);
-
     layoutAlgo->addWidget(new QLabel("<b>Обходы:</b>"));
     QHBoxLayout *travLayout = new QHBoxLayout();
     travLayout->addWidget(new QLabel("Start:"));
     travLayout->addWidget(startVertexCombo);
     layoutAlgo->addLayout(travLayout);
     layoutAlgo->addWidget(traversalButton);
-
     layoutAlgo->addStretch();
     toolsPanel->addItem(pageAlgo, "2. Алгоритмы");
 
@@ -347,7 +356,7 @@ void MainWindow::setupUI()
     layoutCombo->addItem("Случайная (Random)");
 
     useAnimationCheckbox = new QCheckBox("Плавная анимация");
-    useAnimationCheckbox->setChecked(true); // Включено по умолчанию
+    useAnimationCheckbox->setChecked(true);
 
     QPushButton *applyLayoutBtn = new QPushButton("Применить шаблон");
     connect(applyLayoutBtn, &QPushButton::clicked, this, &MainWindow::applyLayout);
@@ -356,11 +365,13 @@ void MainWindow::setupUI()
     layoutView->addSpacing(20);
     layoutView->addWidget(new QLabel("Шаблоны:"));
     layoutView->addWidget(layoutCombo);
-    layoutView->addWidget(useAnimationCheckbox);
+    layoutView->addWidget(useAnimationCheckbox); // Добавили галочку
     layoutView->addWidget(applyLayoutBtn);
     layoutView->addStretch();
+
     toolsPanel->addItem(pageView, "3. Вид и Физика");
 
+    // СБОРКА ОКОН
     QGroupBox *graphGroup = new QGroupBox("Граф");
     QVBoxLayout *graphLayout = new QVBoxLayout(graphGroup);
     graphLayout->addWidget(view);
@@ -377,6 +388,7 @@ void MainWindow::setupUI()
 
     setCentralWidget(centralWidget);
 
+    // ТУЛБАР
     exportToolBar = new QToolBar("Экспорт", this);
     saveImageAction = new QAction("IMG", this);
     saveDotAction = new QAction("DOT", this);
@@ -387,6 +399,13 @@ void MainWindow::setupUI()
     connect(saveImageAction, &QAction::triggered, this, &MainWindow::saveGraphToImage);
     connect(saveDotAction, &QAction::triggered, this, &MainWindow::saveGraphToDotFile);
     connect(traversalButton, &QPushButton::clicked, this, &MainWindow::visualizeTraversal);
+
+    // ШОРТКАТЫ
+    QShortcut *undoShortcut = new QShortcut(QKeySequence("Ctrl+Z"), this);
+    connect(undoShortcut, &QShortcut::activated, this, &MainWindow::undo);
+
+    QShortcut *redoShortcut = new QShortcut(QKeySequence("Ctrl+Shift+Z"), this);
+    connect(redoShortcut, &QShortcut::activated, this, &MainWindow::redo);
 }
 
 void MainWindow::updateGraphView() {
@@ -422,10 +441,13 @@ void MainWindow::updateGraphView() {
     }
 
     const auto &adjMatrix = graph->adjacencyMatrix();
+    bool isDirected = graph->getDirected();
+
     for (int i = 0; i < adjMatrix.size(); ++i) {
-        for (int j = i; j < adjMatrix[i].size(); ++j) {
+        int startJ = isDirected ? 0 : i;
+        for (int j = startJ; j < adjMatrix[i].size(); ++j) {
             if (adjMatrix[i][j] > 0 && nodes.contains(i) && nodes.contains(j)) {
-                Edge *edge = new Edge(nodes[i], nodes[j], adjMatrix[i][j]);
+                Edge *edge = new Edge(nodes[i], nodes[j], adjMatrix[i][j], isDirected);
                 scene->addItem(edge);
             }
         }
@@ -436,22 +458,39 @@ void MainWindow::updateGraphView() {
         startVertexCombo->addItem(QString::number(i+1), i);
     }
 
-    // Центрируем
     view->centerOn(0,0);
 }
 
-void MainWindow::rebuildGraphKeepPositions() {
+void MainWindow::rebuildGraphKeepPositions(int removedId) {
+    qDebug() << "VIEW: Перестройка с сохранением позиций. Удален ID:" << removedId;
+
+    // 1. Сохраняем текущие позиции
     QVector<QPointF> oldPositions;
     for (int i = 0; i < nodes.size(); ++i) {
         if (nodes.contains(i)) oldPositions.append(nodes[i]->pos());
         else oldPositions.append(QPointF(0,0));
     }
 
+    // 2. Строим новый граф
     updateGraphView();
     updateTableFromGraph();
 
-    for (int i = 0; i < qMin(nodes.size(), oldPositions.size()); ++i) {
-        if (nodes.contains(i)) nodes[i]->setPos(oldPositions[i]);
+    // 3. Восстанавливаем позиции УМНО (сдвигая индексы)
+    int oldIdx = 0;
+    int newNodesCount = nodes.size();
+
+    for (int newIdx = 0; newIdx < newNodesCount; ++newIdx) {
+        // Если этот индекс был удален в старом массиве, пропускаем его позицию
+        if (oldIdx == removedId) {
+            oldIdx++;
+        }
+
+        // Берем позицию из старого массива
+        if (oldIdx < oldPositions.size() && nodes.contains(newIdx)) {
+            nodes[newIdx]->setPos(oldPositions[oldIdx]);
+        }
+
+        oldIdx++;
     }
 }
 
@@ -459,26 +498,52 @@ void MainWindow::updateTableFromGraph() {
     if (!graph) return;
     updatingMatrix = true;
 
-    const auto& matrix = graph->adjacencyMatrix();
-    int n = matrix.size();
+    bool showIncidence = (representationCombo->currentIndex() == 1);
 
-    if (sizeCombo->findData(n) == -1) sizeCombo->addItem(QString("%1x%1").arg(n), n);
-    sizeCombo->setCurrentIndex(sizeCombo->findData(n));
+    if (showIncidence) {
+        const auto& matrix = graph->incidenceMatrix();
+        int rows = matrix.size();
+        int cols = (rows > 0) ? matrix[0].size() : 0;
 
-    matrixTable->setRowCount(n);
-    matrixTable->setColumnCount(n);
+        if (sizeCombo->findData(rows) == -1) sizeCombo->addItem(QString("%1x%1").arg(rows), rows);
+        sizeCombo->setCurrentIndex(sizeCombo->findData(rows));
 
-    for (int i = 0; i < n; ++i) {
-        matrixTable->setRowHeight(i, 30);
-        for (int j = 0; j < n; ++j) {
-            if (!matrixTable->item(i, j)) {
-                matrixTable->setItem(i, j, new QTableWidgetItem());
-                matrixTable->item(i, j)->setTextAlignment(Qt::AlignCenter);
+        matrixTable->setRowCount(rows);
+        matrixTable->setColumnCount(cols);
+
+        for (int i = 0; i < rows; ++i) {
+            matrixTable->setRowHeight(i, 30);
+            for (int j = 0; j < cols; ++j) {
+                if (!matrixTable->item(i, j)) {
+                    matrixTable->setItem(i, j, new QTableWidgetItem());
+                    matrixTable->item(i, j)->setTextAlignment(Qt::AlignCenter);
+                }
+                matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
             }
-            matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
         }
+    } else {
+        const auto& matrix = graph->adjacencyMatrix();
+        int n = matrix.size();
+
+        if (sizeCombo->findData(n) == -1) sizeCombo->addItem(QString("%1x%1").arg(n), n);
+        sizeCombo->setCurrentIndex(sizeCombo->findData(n));
+
+        matrixTable->setRowCount(n);
+        matrixTable->setColumnCount(n);
+
+        for (int i = 0; i < n; ++i) {
+            matrixTable->setRowHeight(i, 30);
+            for (int j = 0; j < n; ++j) {
+                if (!matrixTable->item(i, j)) {
+                    matrixTable->setItem(i, j, new QTableWidgetItem());
+                    matrixTable->item(i, j)->setTextAlignment(Qt::AlignCenter);
+                }
+                matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
+            }
+        }
+        if (representationCombo->currentIndex() == 0) enforceDiagonalZeros();
     }
-    if (representationCombo->currentIndex() == 0) enforceDiagonalZeros();
+
     updatingMatrix = false;
 }
 
@@ -639,26 +704,58 @@ void MainWindow::checkBipartite() {
 
 void MainWindow::onRandomGraphClicked() {
     bool ok;
-    int count = QInputDialog::getInt(this, "Генерация", "Вершин:", 5, 2, 50, 1, &ok);
+    // 1. Спрашиваем количество вершин
+    int count = QInputDialog::getInt(this, "Генерация", "Количество вершин:", 5, 2, 50, 1, &ok);
     if (!ok) return;
 
-    representationCombo->setCurrentIndex(0);
+    // 2. Смотрим на состояние чекбокса
+    // (directedCheckbox мы вынесли в .h файл на предыдущем шаге)
+    bool makeDirected = directedCheck->isChecked();
+
+    // Обновляем модель (на всякий случай)
+    graph->setDirected(makeDirected);
+
+    // 3. Подготовка таблицы
+    representationCombo->setCurrentIndex(0); // Матрица смежности
     resizeMatrixTable(count, count);
     updatingMatrix = true;
 
-    for (int i = 0; i < count; ++i) {
-        for (int j = i + 1; j < count; ++j) {
-            if (QRandomGenerator::global()->bounded(100) < 30) {
-                if (auto item1 = matrixTable->item(i, j)) item1->setText("1");
-                if (auto item2 = matrixTable->item(j, i)) item2->setText("1");
-            } else {
-                if (auto item1 = matrixTable->item(i, j)) item1->setText("0");
-                if (auto item2 = matrixTable->item(j, i)) item2->setText("0");
+    saveToHistory();
+
+    // Очистка
+    for(int i=0; i<count; ++i)
+        for(int j=0; j<count; ++j)
+            if(auto it = matrixTable->item(i,j)) it->setText("0");
+
+    // 4. Генерация
+    if (makeDirected) {
+        // ОРИЕНТИРОВАННЫЙ: заполняем каждую ячейку независимо
+        for (int i = 0; i < count; ++i) {
+            for (int j = 0; j < count; ++j) {
+                if (i == j) continue;
+                // Вероятность 20% (чуть меньше, чтобы не было каши из стрелок)
+                if (QRandomGenerator::global()->bounded(100) < 20) {
+                    if (auto item = matrixTable->item(i, j)) item->setText("1");
+                }
+            }
+        }
+    } else {
+        // ОБЫЧНЫЙ: заполняем симметрично
+        for (int i = 0; i < count; ++i) {
+            for (int j = i + 1; j < count; ++j) {
+                // Вероятность 30%
+                if (QRandomGenerator::global()->bounded(100) < 30) {
+                    if (auto item1 = matrixTable->item(i, j)) item1->setText("1");
+                    if (auto item2 = matrixTable->item(j, i)) item2->setText("1");
+                }
             }
         }
     }
+
     updatingMatrix = false;
     onGenerateClicked();
+
+    statusLabel->setText(QString("Сгенерирован %1 граф").arg(makeDirected ? "орграф" : "обычный"));
 }
 
 void MainWindow::applyLayout()
@@ -736,28 +833,44 @@ void MainWindow::calculateGraphProperties() {
     if (!graph || graph->nodeCount() == 0) return;
 
     QString text = "=== Основные характеристики ===\n";
-    text += QString("Вершин: %1\nРёбер: %2\nТип: Неориентированный\n").arg(graph->nodeCount()).arg(graph->edgeCount());
+    text += QString("Вершин: %1\n").arg(graph->nodeCount());
+    text += QString("Рёбер: %1\n").arg(graph->edgeCount());
+
+    // ИСПРАВЛЕНИЕ: Честный вывод типа графа
+    QString typeStr = graph->getDirected() ? "Ориентированный" : "Неориентированный";
+    text += QString("Тип: %1\n").arg(typeStr);
 
     QVector<int> degrees = graph->calculateDegrees();
-    text += "\n=== Степени ===\n";
-    for(int i=0; i<degrees.size(); ++i) text += QString("В%1: %2\n").arg(i+1).arg(degrees[i]);
+    text += "\n=== Степени вершин ===\n";
+    for(int i=0; i<degrees.size(); ++i) {
+        // Для ориентированного графа это исходящая степень (out-degree)
+        text += QString("В%1: %2\n").arg(i+1).arg(degrees[i]);
+    }
+
     text += QString("Полный: %1\n").arg(graph->isComplete() ? "Да" : "Нет");
 
+    // Метрики
     int rad = graph->getRadius();
     int diam = graph->getDiameter();
+
+    // Если граф ориентированный и не сильно связный, радиус может быть бесконечным
     if (rad != INT_MAX) {
         text += QString("\nРадиус: %1\nДиаметр: %2\nМедиана: В%3\n").arg(rad).arg(diam).arg(graph->getMedian()+1);
+
         auto ecc = graph->getEccentricities();
-        text += "Центральные: "; for(int i=0; i<ecc.size(); ++i) if(ecc[i]==rad) text += QString("%1 ").arg(i+1);
-        text += "\nПериферийные: "; for(int i=0; i<ecc.size(); ++i) if(ecc[i]==diam) text += QString("%1 ").arg(i+1);
+        text += "Центральные: ";
+        for(int i=0; i<ecc.size(); ++i) if(ecc[i]==rad) text += QString("%1 ").arg(i+1);
+
+        text += "\nПериферийные: ";
+        for(int i=0; i<ecc.size(); ++i) if(ecc[i]==diam) text += QString("%1 ").arg(i+1);
     } else {
-        text += "\nГраф несвязный (метрики не определены)\n";
+        text += "\nГраф несвязный (или не сильно связный)\nМетрики не определены\n";
     }
 
     text += QString("\nЭйлеров: %1").arg(graph->isEulerian()?"Да":"Нет");
     text += QString("\nСвязный: %1").arg(graph->isConnected()?"Да":"Нет");
 
-    // Критические (ИСПРАВЛЕНО ЗДЕСЬ)
+    // Критические элементы
     auto art = graph->getArticulationPoints();
     text += QString("\n\nТочки сочленения: ") + (art.isEmpty() ? "Нет" : "");
     for(int v : art) text += QString("%1 ").arg(v+1);
@@ -768,25 +881,34 @@ void MainWindow::calculateGraphProperties() {
 
     text += QString("\nДвудольный: %1").arg(graph->isBipartite()?"Да":"Нет");
 
+    // Матрица расстояний
     text += "\n\n=== Матрица расстояний ===\n    ";
     auto dist = graph->getDistanceMatrix();
+    // Заголовок
     for(int i=0; i<dist.size(); ++i) text += QString("%1 ").arg(i+1, 3);
     text += "\n";
+    // Строки
     for(int i=0; i<dist.size(); ++i) {
         text += QString("%1: ").arg(i+1, 2);
-        for(int j=0; j<dist[i].size(); ++j) text += (dist[i][j]==INT_MAX ? " ∞ " : QString("%1 ").arg(dist[i][j], 3));
+        for(int j=0; j<dist[i].size(); ++j) {
+            text += (dist[i][j]==INT_MAX ? "  ∞ " : QString("%1 ").arg(dist[i][j], 3));
+        }
         text += "\n";
     }
 
+    // Компоненты связности
     auto comp = graph->findConnectedComponents();
     text += QString("\nКомпонент связности: %1\n").arg(comp.size());
     for(int i=0; i<comp.size(); ++i) {
-        QStringList l; for(int v : comp[i]) l << QString::number(v+1);
+        QStringList l;
+        for(int v : comp[i]) l << QString::number(v+1);
         text += QString("К%1: %2\n").arg(i+1).arg(l.join(", "));
     }
 
+    // Раскраска
     auto clr = graph->greedyColoring();
-    int maxC = 0; if(!clr.isEmpty()) maxC = *std::max_element(clr.begin(), clr.end()) + 1;
+    int maxC = 0;
+    if(!clr.isEmpty()) maxC = *std::max_element(clr.begin(), clr.end()) + 1;
     text += QString("\nХроматическое число: %1").arg(maxC);
 
     graphPropertiesDisplay->setPlainText(text);
@@ -891,19 +1013,78 @@ void MainWindow::onMatrixCellChanged(int row, int col) {
     if (updatingMatrix) return;
     auto item = matrixTable->item(row, col);
     if (!item) return;
+
     bool ok;
-    int val = item->text().toInt(&ok);
-    if (!ok || val < 0) {
+    int value = item->text().toInt(&ok);
+
+    // 1. Проверяем, что это вообще число
+    if (!ok) {
+        // Если ввели букву - сбрасываем
         item->setText("0");
         return;
     }
-    if (representationCombo->currentIndex() == 0) updateSymmetricCell(row, col);
+
+    // 2. Логика проверки значений зависит от типа матрицы
+    if (representationCombo->currentIndex() == 0) {
+        // --- МАТРИЦА СМЕЖНОСТИ ---
+        // Здесь веса обычно неотрицательные (хотя в теории графов бывают и <0)
+        // Если вы хотите разрешить только >= 0:
+        if (value < 0) {
+            QMessageBox::warning(this, "Ошибка", "Вес ребра не может быть отрицательным");
+            item->setText("0");
+            return;
+        }
+
+        // Обновляем симметричную ячейку (если граф неориентированный)
+        if (directedCheck && !directedCheck->isChecked()) {
+            updateSymmetricCell(row, col);
+        }
+
+        // Диагональ должна быть 0 (если нет петель)
+        if (row == col && value != 0) {
+             item->setText("0");
+        }
+    }
+    else {
+        // --- МАТРИЦА ИНЦИДЕНТНОСТИ ---
+        // Здесь разрешены только: 0, 1 (и -1 для орграфов)
+        // Вес ребра тут обычно не указывается (или все ребра весом 1)
+
+        bool isDirected = (directedCheck && directedCheck->isChecked());
+
+        if (isDirected) {
+            // Орграф: можно 0, 1, -1
+            if (value != 0 && value != 1 && value != -1) {
+                QMessageBox::warning(this, "Ошибка", "В матрице инцидентности орграфа только: 0, 1, -1");
+                item->setText("0");
+            }
+        } else {
+            // Обычный граф: можно 0, 1
+            if (value != 0 && value != 1) {
+                QMessageBox::warning(this, "Ошибка", "В матрице инцидентности только: 0, 1");
+                item->setText("0");
+            }
+        }
+    }
 }
 
 void MainWindow::onRepresentationChanged(int index) {
     int s = sizeCombo->currentData().toInt();
     if (index == 0) resizeMatrixTable(s, s);
     else resizeMatrixTable(s, std::max(1, s-1));
+    if (index == 1) { // Инцидентность
+        hintLabel->show();
+        if (directedCheck && directedCheck->isChecked()) {
+            hintLabel->setText("Орграф: 1=источник, -1=цель (в столбце)");
+        } else {
+            hintLabel->setText("Граф: Две 1 в столбце");
+        }
+    } else {
+        hintLabel->hide();
+    }
+
+    // ВАЖНО: Если граф уже есть, перерисуем таблицу в новом формате
+    updateTableFromGraph();
 }
 
 void MainWindow::resizeMatrix() {
@@ -920,18 +1101,97 @@ bool MainWindow::parseMatrix() {
     int rows = matrixTable->rowCount();
     int cols = matrixTable->columnCount();
     QVector<QVector<int>> m(rows, QVector<int>(cols));
+
     for(int i=0; i<rows; ++i) {
         for(int j=0; j<cols; ++j) {
             if(!matrixTable->item(i, j)) return false;
+            // Теперь читаем любые числа (включая -1)
             m[i][j] = matrixTable->item(i, j)->text().toInt();
         }
     }
-    if (representationCombo->currentIndex() == 0) graph->createFromAdjacencyMatrix(m);
-    else graph->createFromIncidenceMatrix(m);
+    bool directed = (directedCheck && directedCheck->isChecked());
+    graph->setDirected(directed);
+
+    // 2. Создаем граф
+    if (representationCombo->currentIndex() == 0) {
+        graph->createFromAdjacencyMatrix(m);
+    } else {
+        graph->createFromIncidenceMatrix(m);
+    }
+
     statusLabel->setText("Матрица загружена");
     return true;
 }
 
 void MainWindow::onGenerateClicked() {
+    saveToHistory();
     if (parseMatrix()) updateGraphView();
+}
+
+// === ИСТОРИЯ (UNDO/REDO) ===
+
+
+void MainWindow::saveToHistory() {
+    qDebug() << "HISTORY: Сохранение состояния...";
+    GraphState state;
+    state.matrix = graph->adjacencyMatrix();
+    state.isDirected = graph->getDirected();
+
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) {
+        state.positions.insert(it.key(), it.value()->pos());
+    }
+
+    undoStack.push(state);
+    redoStack.clear();
+
+    if (undoStack.size() > 50) undoStack.removeFirst();
+}
+
+void MainWindow::restoreState(const GraphState &state) {
+    qDebug() << "HISTORY: Восстановление...";
+    stopAndReset();
+
+    graph->setDirected(state.isDirected);
+    if (directedCheck) directedCheck->setChecked(state.isDirected);
+
+    graph->createFromAdjacencyMatrix(state.matrix);
+
+    updateGraphView();
+    updateTableFromGraph();
+
+    for(auto it = state.positions.begin(); it != state.positions.end(); ++it) {
+        int id = it.key();
+        if (nodes.contains(id)) {
+            nodes[id]->setPos(it.value());
+        }
+    }
+}
+
+void MainWindow::undo() {
+    if (undoStack.isEmpty()) {
+        qDebug() << "HISTORY: Стек пуст";
+        return;
+    }
+
+    GraphState currentState;
+    currentState.matrix = graph->adjacencyMatrix();
+    currentState.isDirected = graph->getDirected();
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) currentState.positions.insert(it.key(), it.value()->pos());
+    redoStack.push(currentState);
+
+    GraphState prevState = undoStack.pop();
+    restoreState(prevState);
+}
+
+void MainWindow::redo() {
+    if (redoStack.isEmpty()) return;
+
+    GraphState currentState;
+    currentState.matrix = graph->adjacencyMatrix();
+    currentState.isDirected = graph->getDirected();
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) currentState.positions.insert(it.key(), it.value()->pos());
+    undoStack.push(currentState);
+
+    GraphState nextState = redoStack.pop();
+    restoreState(nextState);
 }

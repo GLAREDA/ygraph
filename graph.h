@@ -23,6 +23,9 @@ public:
     void addEdge(int u, int v, int weight = 1);
     void removeEdge(int u, int v);
 
+    void setDirected(bool directed) { isDirected = directed; }
+    bool getDirected() const { return isDirected; }
+
     const QVector<QVector<int>>& adjacencyMatrix() const;
     const QVector<QVector<int>>& incidenceMatrix() const;
 
@@ -61,6 +64,7 @@ private:
     QVector<QVector<int>> adjMatrix;
     QVector<QVector<int>> incMatrix;
     QMap<QPair<int, int>, int> edges; // Храним ребра с i < j
+    bool isDirected = false;
 
     void updateIncidenceMatrix();
     void floydWarshall(QVector<QVector<int>>& dist) const;

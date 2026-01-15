@@ -23,8 +23,14 @@ void Graph::createFromAdjacencyMatrix(const QVector<QVector<int>>& matrix) {
     adjMatrix = matrix;
 
     edges.clear();
-    for (int i = 0; i < adjMatrix.size(); ++i) {
-        for (int j = i; j < adjMatrix[i].size(); ++j) { // Только верхний треугольник
+    int n = adjMatrix.size();
+
+    for (int i = 0; i < n; ++i) {
+        // Если граф ориентированный, проходим по всей матрице.
+        // Если нет - только по верхнему треугольнику, чтобы не дублировать ребра.
+        int startJ = isDirected ? 0 : i;
+
+        for (int j = startJ; j < n; ++j) {
             if (adjMatrix[i][j] > 0) {
                 edges.insert({i, j}, adjMatrix[i][j]);
             }
@@ -39,6 +45,7 @@ void Graph::createFromIncidenceMatrix(const QVector<QVector<int>>& matrix) {
 
     int nodes = matrix.size();
     if (nodes == 0) return;
+    int edgesCount = matrix[0].size();
 
     adjMatrix.resize(nodes);
     for (int i = 0; i < nodes; ++i) {
@@ -46,22 +53,45 @@ void Graph::createFromIncidenceMatrix(const QVector<QVector<int>>& matrix) {
         adjMatrix[i].fill(0);
     }
 
-    for (int j = 0; j < matrix[0].size(); ++j) {
-        QVector<int> vertices;
+    for (int j = 0; j < edgesCount; ++j) {
+        int u = -1, v = -1;
+        int valU = 0, valV = 0;
+
         for (int i = 0; i < nodes; ++i) {
             if (matrix[i][j] != 0) {
-                vertices.append(i);
+                if (u == -1) { u = i; valU = matrix[i][j]; }
+                else if (v == -1) { v = i; valV = matrix[i][j]; }
             }
         }
-        if (vertices.size() == 2) {
-            int from = vertices[0];
-            int to = vertices[1];
-            adjMatrix[from][to] = 1;
-            adjMatrix[to][from] = 1;
-            edges.insert({qMin(from, to), qMax(from, to)}, 1);
+
+        if (u != -1 && v != -1) {
+            if (isDirected) {
+                // ОРГРАФ
+                if (valU == 1 && valV == -1) {
+                    adjMatrix[u][v] = 1; // u -> v
+                    edges.insert({u, v}, 1);
+                }
+                else if (valU == -1 && valV == 1) {
+                    adjMatrix[v][u] = 1; // v -> u
+                    edges.insert({v, u}, 1);
+                }
+                else {
+                    // === ИСПРАВЛЕНИЕ ЗДЕСЬ ===
+                    // Если (1, 1) или (-1, -1) -> Двусторонняя связь
+                    adjMatrix[u][v] = 1;
+                    adjMatrix[v][u] = 1;
+                    edges.insert({u, v}, 1);
+                    edges.insert({v, u}, 1);
+                }
+            }
+            else {
+                // НЕОРИЕНТИРОВАННЫЙ
+                adjMatrix[u][v] = 1;
+                adjMatrix[v][u] = 1;
+                edges.insert({qMin(u, v), qMax(u, v)}, 1);
+            }
         }
     }
-    updateIncidenceMatrix();
 }
 
 const QVector<QVector<int>>& Graph::adjacencyMatrix() const { return adjMatrix; }
@@ -729,13 +759,23 @@ void Graph::updateIncidenceMatrix() {
     }
 
     int edgeIndex = 0;
+    // Используем итератор по edges (QMap<QPair<int,int>, int>)
     for (auto it = edges.begin(); it != edges.end(); ++it) {
         int from = it.key().first;
         int to = it.key().second;
 
-        incMatrix[from][edgeIndex] = 1;
-        incMatrix[to][edgeIndex] = 1;
-
+        if (isDirected) {
+            // Ориентированный: 1 (start) -> -1 (end)
+            // Если петля (from == to), можно ставить 2 или что-то особое, но пока пропустим
+            if (from != to) {
+                incMatrix[from][edgeIndex] = 1;
+                incMatrix[to][edgeIndex] = -1;
+            }
+        } else {
+            // Неориентированный: 1 --- 1
+            incMatrix[from][edgeIndex] = 1;
+            incMatrix[to][edgeIndex] = 1;
+        }
         edgeIndex++;
     }
 }
@@ -772,9 +812,13 @@ void Graph::addEdge(int u, int v, int weight) {
     if (u < 0 || u >= adjMatrix.size() || v < 0 || v >= adjMatrix.size()) return;
 
     adjMatrix[u][v] = weight;
-    adjMatrix[v][u] = weight;
 
-    // ВАЖНО: Копия
+    // Если граф НЕ ориентированный, добавляем обратную связь
+    if (!isDirected) {
+        adjMatrix[v][u] = weight;
+    }
+
+    // Важно: копируем для обновления кэшей
     QVector<QVector<int>> matrixCopy = adjMatrix;
     createFromAdjacencyMatrix(matrixCopy);
 }
