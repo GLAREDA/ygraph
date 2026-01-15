@@ -9,6 +9,7 @@ class Edge : public QGraphicsItem
 {
 public:
     Edge(Node *sourceNode, Node *destNode, int weight = 1);
+    Edge(Node *sourceNode, Node *destNode, int weight = 1, bool isDirected = false);
 
 
     Node* sourceNode() const { return source; }
@@ -30,6 +31,8 @@ private:
     QPointF destPoint;
     int weight;
     QColor currentColor;
+    bool isDirected;
+    qreal arrowSize = 15;
 };
 
 #endif // EDGE_H

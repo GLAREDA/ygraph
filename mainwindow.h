@@ -116,6 +116,7 @@ private:
     // Редактор
     bool isEditMode;
     Node *selectedNode; // Текущий выделенный узел
+    QCheckBox *directedCheck;
 
     // Временные (не используются в текущей логике, но оставим для совместимости)
     QGraphicsLineItem *tempLine;

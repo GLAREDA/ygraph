@@ -278,6 +278,14 @@ void MainWindow::setupUI()
     sizeLayout->addWidget(resizeButton);
 
     layoutData->addWidget(new QLabel("Параметры матрицы:"));
+    directedCheck = new QCheckBox("Ориентированный граф");
+    directedCheck->setChecked(false);
+    // При переключении меняем свойство графа и перерисовываем
+    connect(directedCheck, &QCheckBox::toggled, [=](bool checked){
+        graph->setDirected(checked);
+        updateGraphView(); // Перерисовка, чтобы появились/исчезли стрелки
+    });
+    layoutData->addWidget(directedCheck);
     layoutData->addWidget(representationCombo);
     layoutData->addLayout(sizeLayout);
 
@@ -422,10 +430,18 @@ void MainWindow::updateGraphView() {
     }
 
     const auto &adjMatrix = graph->adjacencyMatrix();
+    bool isDirected = graph->getDirected(); // Узнаем тип графа
+
     for (int i = 0; i < adjMatrix.size(); ++i) {
-        for (int j = i; j < adjMatrix[i].size(); ++j) {
+        // Если граф ориентированный - бежим по всем.
+        // Если нет - только j >= i (чтобы не рисовать линию дважды)
+        int startJ = isDirected ? 0 : i;
+
+        for (int j = startJ; j < adjMatrix[i].size(); ++j) {
             if (adjMatrix[i][j] > 0 && nodes.contains(i) && nodes.contains(j)) {
-                Edge *edge = new Edge(nodes[i], nodes[j], adjMatrix[i][j]);
+
+                // Передаем флаг isDirected в конструктор Edge
+                Edge *edge = new Edge(nodes[i], nodes[j], adjMatrix[i][j], isDirected);
                 scene->addItem(edge);
             }
         }
@@ -459,26 +475,66 @@ void MainWindow::updateTableFromGraph() {
     if (!graph) return;
     updatingMatrix = true;
 
-    const auto& matrix = graph->adjacencyMatrix();
-    int n = matrix.size();
+    // 1. Узнаем, что хочет пользователь
+    bool showIncidence = (representationCombo->currentIndex() == 1);
 
-    if (sizeCombo->findData(n) == -1) sizeCombo->addItem(QString("%1x%1").arg(n), n);
-    sizeCombo->setCurrentIndex(sizeCombo->findData(n));
+    if (showIncidence) {
+        // --- РЕЖИМ ИНЦИДЕНТНОСТИ ---
+        const auto& matrix = graph->incidenceMatrix();
+        int rows = matrix.size();
+        int cols = (rows > 0) ? matrix[0].size() : 0;
 
-    matrixTable->setRowCount(n);
-    matrixTable->setColumnCount(n);
+        // Обновляем размер комбобокса вершин
+        if (sizeCombo->findData(rows) == -1) sizeCombo->addItem(QString("%1x%1").arg(rows), rows);
+        sizeCombo->setCurrentIndex(sizeCombo->findData(rows));
 
-    for (int i = 0; i < n; ++i) {
-        matrixTable->setRowHeight(i, 30);
-        for (int j = 0; j < n; ++j) {
-            if (!matrixTable->item(i, j)) {
-                matrixTable->setItem(i, j, new QTableWidgetItem());
-                matrixTable->item(i, j)->setTextAlignment(Qt::AlignCenter);
+        matrixTable->setRowCount(rows);
+        matrixTable->setColumnCount(cols);
+
+        for (int i = 0; i < rows; ++i) {
+            matrixTable->setRowHeight(i, 30);
+            for (int j = 0; j < cols; ++j) {
+                if (!matrixTable->item(i, j)) {
+                    matrixTable->setItem(i, j, new QTableWidgetItem());
+                    matrixTable->item(i, j)->setTextAlignment(Qt::AlignCenter);
+                }
+                matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
             }
-            matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
         }
+        // Заголовки столбцов: e1, e2, e3...
+        QStringList headers;
+        for(int j=0; j<cols; ++j) headers << QString("e%1").arg(j+1);
+        matrixTable->setHorizontalHeaderLabels(headers);
+
+    } else {
+        // --- РЕЖИМ СМЕЖНОСТИ (Старый код) ---
+        const auto& matrix = graph->adjacencyMatrix();
+        int n = matrix.size();
+
+        if (sizeCombo->findData(n) == -1) sizeCombo->addItem(QString("%1x%1").arg(n), n);
+        sizeCombo->setCurrentIndex(sizeCombo->findData(n));
+
+        matrixTable->setRowCount(n);
+        matrixTable->setColumnCount(n);
+
+        for (int i = 0; i < n; ++i) {
+            matrixTable->setRowHeight(i, 30);
+            for (int j = 0; j < n; ++j) {
+                if (!matrixTable->item(i, j)) {
+                    matrixTable->setItem(i, j, new QTableWidgetItem());
+                    matrixTable->item(i, j)->setTextAlignment(Qt::AlignCenter);
+                }
+                matrixTable->item(i, j)->setText(QString::number(matrix[i][j]));
+            }
+        }
+        // Заголовки столбцов: 1, 2, 3...
+        QStringList headers;
+        for(int j=0; j<n; ++j) headers << QString::number(j+1);
+        matrixTable->setHorizontalHeaderLabels(headers);
+
+        enforceDiagonalZeros();
     }
-    if (representationCombo->currentIndex() == 0) enforceDiagonalZeros();
+
     updatingMatrix = false;
 }
 
@@ -639,26 +695,56 @@ void MainWindow::checkBipartite() {
 
 void MainWindow::onRandomGraphClicked() {
     bool ok;
-    int count = QInputDialog::getInt(this, "Генерация", "Вершин:", 5, 2, 50, 1, &ok);
+    // 1. Спрашиваем количество вершин
+    int count = QInputDialog::getInt(this, "Генерация", "Количество вершин:", 5, 2, 50, 1, &ok);
     if (!ok) return;
 
-    representationCombo->setCurrentIndex(0);
+    // 2. Смотрим на состояние чекбокса
+    // (directedCheckbox мы вынесли в .h файл на предыдущем шаге)
+    bool makeDirected = directedCheck->isChecked();
+
+    // Обновляем модель (на всякий случай)
+    graph->setDirected(makeDirected);
+
+    // 3. Подготовка таблицы
+    representationCombo->setCurrentIndex(0); // Матрица смежности
     resizeMatrixTable(count, count);
     updatingMatrix = true;
 
-    for (int i = 0; i < count; ++i) {
-        for (int j = i + 1; j < count; ++j) {
-            if (QRandomGenerator::global()->bounded(100) < 30) {
-                if (auto item1 = matrixTable->item(i, j)) item1->setText("1");
-                if (auto item2 = matrixTable->item(j, i)) item2->setText("1");
-            } else {
-                if (auto item1 = matrixTable->item(i, j)) item1->setText("0");
-                if (auto item2 = matrixTable->item(j, i)) item2->setText("0");
+    // Очистка
+    for(int i=0; i<count; ++i)
+        for(int j=0; j<count; ++j)
+            if(auto it = matrixTable->item(i,j)) it->setText("0");
+
+    // 4. Генерация
+    if (makeDirected) {
+        // ОРИЕНТИРОВАННЫЙ: заполняем каждую ячейку независимо
+        for (int i = 0; i < count; ++i) {
+            for (int j = 0; j < count; ++j) {
+                if (i == j) continue;
+                // Вероятность 20% (чуть меньше, чтобы не было каши из стрелок)
+                if (QRandomGenerator::global()->bounded(100) < 20) {
+                    if (auto item = matrixTable->item(i, j)) item->setText("1");
+                }
+            }
+        }
+    } else {
+        // ОБЫЧНЫЙ: заполняем симметрично
+        for (int i = 0; i < count; ++i) {
+            for (int j = i + 1; j < count; ++j) {
+                // Вероятность 30%
+                if (QRandomGenerator::global()->bounded(100) < 30) {
+                    if (auto item1 = matrixTable->item(i, j)) item1->setText("1");
+                    if (auto item2 = matrixTable->item(j, i)) item2->setText("1");
+                }
             }
         }
     }
+
     updatingMatrix = false;
     onGenerateClicked();
+
+    statusLabel->setText(QString("Сгенерирован %1 граф").arg(makeDirected ? "орграф" : "обычный"));
 }
 
 void MainWindow::applyLayout()
@@ -736,28 +822,44 @@ void MainWindow::calculateGraphProperties() {
     if (!graph || graph->nodeCount() == 0) return;
 
     QString text = "=== Основные характеристики ===\n";
-    text += QString("Вершин: %1\nРёбер: %2\nТип: Неориентированный\n").arg(graph->nodeCount()).arg(graph->edgeCount());
+    text += QString("Вершин: %1\n").arg(graph->nodeCount());
+    text += QString("Рёбер: %1\n").arg(graph->edgeCount());
+
+    // ИСПРАВЛЕНИЕ: Честный вывод типа графа
+    QString typeStr = graph->getDirected() ? "Ориентированный" : "Неориентированный";
+    text += QString("Тип: %1\n").arg(typeStr);
 
     QVector<int> degrees = graph->calculateDegrees();
-    text += "\n=== Степени ===\n";
-    for(int i=0; i<degrees.size(); ++i) text += QString("В%1: %2\n").arg(i+1).arg(degrees[i]);
+    text += "\n=== Степени вершин ===\n";
+    for(int i=0; i<degrees.size(); ++i) {
+        // Для ориентированного графа это исходящая степень (out-degree)
+        text += QString("В%1: %2\n").arg(i+1).arg(degrees[i]);
+    }
+
     text += QString("Полный: %1\n").arg(graph->isComplete() ? "Да" : "Нет");
 
+    // Метрики
     int rad = graph->getRadius();
     int diam = graph->getDiameter();
+
+    // Если граф ориентированный и не сильно связный, радиус может быть бесконечным
     if (rad != INT_MAX) {
         text += QString("\nРадиус: %1\nДиаметр: %2\nМедиана: В%3\n").arg(rad).arg(diam).arg(graph->getMedian()+1);
+
         auto ecc = graph->getEccentricities();
-        text += "Центральные: "; for(int i=0; i<ecc.size(); ++i) if(ecc[i]==rad) text += QString("%1 ").arg(i+1);
-        text += "\nПериферийные: "; for(int i=0; i<ecc.size(); ++i) if(ecc[i]==diam) text += QString("%1 ").arg(i+1);
+        text += "Центральные: ";
+        for(int i=0; i<ecc.size(); ++i) if(ecc[i]==rad) text += QString("%1 ").arg(i+1);
+
+        text += "\nПериферийные: ";
+        for(int i=0; i<ecc.size(); ++i) if(ecc[i]==diam) text += QString("%1 ").arg(i+1);
     } else {
-        text += "\nГраф несвязный (метрики не определены)\n";
+        text += "\nГраф несвязный (или не сильно связный)\nМетрики не определены\n";
     }
 
     text += QString("\nЭйлеров: %1").arg(graph->isEulerian()?"Да":"Нет");
     text += QString("\nСвязный: %1").arg(graph->isConnected()?"Да":"Нет");
 
-    // Критические (ИСПРАВЛЕНО ЗДЕСЬ)
+    // Критические элементы
     auto art = graph->getArticulationPoints();
     text += QString("\n\nТочки сочленения: ") + (art.isEmpty() ? "Нет" : "");
     for(int v : art) text += QString("%1 ").arg(v+1);
@@ -768,25 +870,34 @@ void MainWindow::calculateGraphProperties() {
 
     text += QString("\nДвудольный: %1").arg(graph->isBipartite()?"Да":"Нет");
 
+    // Матрица расстояний
     text += "\n\n=== Матрица расстояний ===\n    ";
     auto dist = graph->getDistanceMatrix();
+    // Заголовок
     for(int i=0; i<dist.size(); ++i) text += QString("%1 ").arg(i+1, 3);
     text += "\n";
+    // Строки
     for(int i=0; i<dist.size(); ++i) {
         text += QString("%1: ").arg(i+1, 2);
-        for(int j=0; j<dist[i].size(); ++j) text += (dist[i][j]==INT_MAX ? " ∞ " : QString("%1 ").arg(dist[i][j], 3));
+        for(int j=0; j<dist[i].size(); ++j) {
+            text += (dist[i][j]==INT_MAX ? "  ∞ " : QString("%1 ").arg(dist[i][j], 3));
+        }
         text += "\n";
     }
 
+    // Компоненты связности
     auto comp = graph->findConnectedComponents();
     text += QString("\nКомпонент связности: %1\n").arg(comp.size());
     for(int i=0; i<comp.size(); ++i) {
-        QStringList l; for(int v : comp[i]) l << QString::number(v+1);
+        QStringList l;
+        for(int v : comp[i]) l << QString::number(v+1);
         text += QString("К%1: %2\n").arg(i+1).arg(l.join(", "));
     }
 
+    // Раскраска
     auto clr = graph->greedyColoring();
-    int maxC = 0; if(!clr.isEmpty()) maxC = *std::max_element(clr.begin(), clr.end()) + 1;
+    int maxC = 0;
+    if(!clr.isEmpty()) maxC = *std::max_element(clr.begin(), clr.end()) + 1;
     text += QString("\nХроматическое число: %1").arg(maxC);
 
     graphPropertiesDisplay->setPlainText(text);
@@ -891,19 +1002,77 @@ void MainWindow::onMatrixCellChanged(int row, int col) {
     if (updatingMatrix) return;
     auto item = matrixTable->item(row, col);
     if (!item) return;
+
     bool ok;
-    int val = item->text().toInt(&ok);
-    if (!ok || val < 0) {
+    int value = item->text().toInt(&ok);
+
+    // 1. Проверяем, что это вообще число
+    if (!ok) {
+        // Если ввели букву - сбрасываем
         item->setText("0");
         return;
     }
-    if (representationCombo->currentIndex() == 0) updateSymmetricCell(row, col);
-}
 
+    // 2. Логика проверки значений зависит от типа матрицы
+    if (representationCombo->currentIndex() == 0) {
+        // --- МАТРИЦА СМЕЖНОСТИ ---
+        // Здесь веса обычно неотрицательные (хотя в теории графов бывают и <0)
+        // Если вы хотите разрешить только >= 0:
+        if (value < 0) {
+            QMessageBox::warning(this, "Ошибка", "Вес ребра не может быть отрицательным");
+            item->setText("0");
+            return;
+        }
+
+        // Обновляем симметричную ячейку (если граф неориентированный)
+        if (directedCheck && !directedCheck->isChecked()) {
+            updateSymmetricCell(row, col);
+        }
+
+        // Диагональ должна быть 0 (если нет петель)
+        if (row == col && value != 0) {
+             item->setText("0");
+        }
+    }
+    else {
+        // --- МАТРИЦА ИНЦИДЕНТНОСТИ ---
+        // Здесь разрешены только: 0, 1 (и -1 для орграфов)
+        // Вес ребра тут обычно не указывается (или все ребра весом 1)
+
+        bool isDirected = (directedCheck && directedCheck->isChecked());
+
+        if (isDirected) {
+            // Орграф: можно 0, 1, -1
+            if (value != 0 && value != 1 && value != -1) {
+                QMessageBox::warning(this, "Ошибка", "В матрице инцидентности орграфа только: 0, 1, -1");
+                item->setText("0");
+            }
+        } else {
+            // Обычный граф: можно 0, 1
+            if (value != 0 && value != 1) {
+                QMessageBox::warning(this, "Ошибка", "В матрице инцидентности только: 0, 1");
+                item->setText("0");
+            }
+        }
+    }
+}
 void MainWindow::onRepresentationChanged(int index) {
     int s = sizeCombo->currentData().toInt();
     if (index == 0) resizeMatrixTable(s, s);
     else resizeMatrixTable(s, std::max(1, s-1));
+    if (index == 1) { // Инцидентность
+        hintLabel->show();
+        if (directedCheck && directedCheck->isChecked()) {
+            hintLabel->setText("Орграф: 1=источник, -1=цель (в столбце)");
+        } else {
+            hintLabel->setText("Граф: Две 1 в столбце");
+        }
+    } else {
+        hintLabel->hide();
+    }
+
+    // ВАЖНО: Если граф уже есть, перерисуем таблицу в новом формате
+    updateTableFromGraph();
 }
 
 void MainWindow::resizeMatrix() {
@@ -920,14 +1089,24 @@ bool MainWindow::parseMatrix() {
     int rows = matrixTable->rowCount();
     int cols = matrixTable->columnCount();
     QVector<QVector<int>> m(rows, QVector<int>(cols));
+
     for(int i=0; i<rows; ++i) {
         for(int j=0; j<cols; ++j) {
             if(!matrixTable->item(i, j)) return false;
+            // Теперь читаем любые числа (включая -1)
             m[i][j] = matrixTable->item(i, j)->text().toInt();
         }
     }
-    if (representationCombo->currentIndex() == 0) graph->createFromAdjacencyMatrix(m);
-    else graph->createFromIncidenceMatrix(m);
+    bool directed = (directedCheck && directedCheck->isChecked());
+    graph->setDirected(directed);
+
+    // 2. Создаем граф
+    if (representationCombo->currentIndex() == 0) {
+        graph->createFromAdjacencyMatrix(m);
+    } else {
+        graph->createFromIncidenceMatrix(m);
+    }
+
     statusLabel->setText("Матрица загружена");
     return true;
 }
