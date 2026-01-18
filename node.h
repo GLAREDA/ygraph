@@ -21,10 +21,16 @@ public:
     int getId() const { return id; }
 
     void setColor(const QColor &color);
-    void resetColor();
 
     void calculateForces();
     bool advancePosition();
+    void setBaseColor(const QColor &color);
+
+    // Получить БАЗОВЫЙ цвет (для сохранения в файл)
+    QColor getBaseColor() const { return baseColor; }
+
+    // Сбросить текущий вид к базовому цвету
+    void resetColor();
 
     enum { Type = UserType + 1 };
     int type() const override { return Type; }
@@ -42,6 +48,8 @@ private:
     int id;
     QColor currentColor;
     QPointF newPos;
+    QColor baseColor;    // Истинный цвет (красный, синий...)
+    QColor visualColor;
 };
 
 #endif // NODE_H

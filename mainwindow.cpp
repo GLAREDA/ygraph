@@ -25,6 +25,13 @@
 #include <QRandomGenerator>
 #include <QWheelEvent>
 #include <QKeyEvent>
+#include <QMenu>
+#include <QSettings>
+#include <QCoreApplication>
+#include <QColorDialog>
+#include <QStyle>
+#include <QPixmap>
+#include <QApplication> // <--- ОБЯЗАТЕЛЬНО
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -34,6 +41,8 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), graph(new Graph()), updatingMatrix(false)
 {
     qDebug() << "APP: Запуск программы";
+
+    loadSettings();
 
     // === ИНИЦИАЛИЗАЦИЯ ===
     animationTimer = nullptr;
@@ -98,6 +107,17 @@ void MainWindow::stopAndReset() {
     resetEdgeColors();
 }
 
+void MainWindow::logAction(const QString& message) {
+    QString time = QDateTime::currentDateTime().toString("HH:mm:ss");
+    QString logMsg = QString("[%1] %2").arg(time, message);
+
+    actionLog.append(logMsg); // Сохраняем в память
+
+    // Выводим пользователю (в свойства или консоль)
+    graphPropertiesDisplay->append(logMsg);
+    qDebug() << logMsg;
+}
+
 void MainWindow::clearSelectionState() {
     if (selectedNode) {
         selectedNode->resetColor();
@@ -118,6 +138,19 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
     }
 
     if (!isEditMode) return QMainWindow::eventFilter(obj, event);
+
+    // Обработка ПРАВОГО клика (Только если режим V2 включен в конфиге)
+    if (obj == view->viewport() && event->type() == QEvent::MouseButtonPress) {
+        QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::RightButton) {
+
+            // Если в конфиге EditMode=1 -> показываем меню
+            if (currentEditMode == 1) {
+                showContextMenu(mouseEvent->globalPos());
+                return true; // Блокируем стандартное меню
+            }
+        }
+    }
 
     // 2. КЛИКИ МЫШКИ
     if (obj == view->viewport() && event->type() == QEvent::MouseButtonPress) {
@@ -259,6 +292,7 @@ void MainWindow::setupUI()
              graph->removeVertex(id);
              rebuildGraphKeepPositions(id); // Удаляем с учетом сдвига индексов
              statusLabel->setText("Узел удален");
+             logAction(QString("Удалена вершина %1").arg(id+1));
         }
     });
     layoutData->addWidget(deleteBtn);
@@ -273,6 +307,7 @@ void MainWindow::setupUI()
         updateGraphView();
         updateTableFromGraph();
         if(representationCombo->currentIndex()==1) onRepresentationChanged(1); // Обновить подсказку
+        logAction(QString("Тип графа изменен на: %1").arg(checked ? "Ориентированный" : "Неориентированный"));
     });
     layoutData->addWidget(directedCheck);
 
@@ -331,6 +366,12 @@ void MainWindow::setupUI()
     layoutAlgo->addWidget(bipartiteButton);
     layoutAlgo->addWidget(criticalButton);
     layoutAlgo->addWidget(new QLabel("<b>Вычисления:</b>"));
+    QPushButton *mstButton = new QPushButton("Минимальное остовное дерево (MST)");
+    connect(mstButton, &QPushButton::clicked, this, &MainWindow::visualizeMST);
+
+    layoutAlgo->addWidget(new QLabel("<b>Оптимизация:</b>")); // Новый заголовок
+    layoutAlgo->addWidget(mstButton);
+
     layoutAlgo->addWidget(colorButton);
     layoutAlgo->addWidget(pathButton);
     layoutAlgo->addWidget(new QLabel("<b>Обходы:</b>"));
@@ -354,6 +395,11 @@ void MainWindow::setupUI()
     layoutCombo->addItem("По кругу (Circular)");
     layoutCombo->addItem("Сетка (Grid)");
     layoutCombo->addItem("Случайная (Random)");
+    layoutCombo->addItem("Дерево (Hierarchical)");
+    layoutCombo->addItem("Двудольная (Bipartite)");   // 4
+    layoutCombo->addItem("Звезда (Star/Wheel)");      // 5
+    layoutCombo->addItem("Спектральная (Spectral)");  // 6
+    layoutCombo->addItem("Умное кольцо (Sorted)");
 
     useAnimationCheckbox = new QCheckBox("Плавная анимация");
     useAnimationCheckbox->setChecked(true);
@@ -371,12 +417,30 @@ void MainWindow::setupUI()
 
     toolsPanel->addItem(pageView, "3. Вид и Физика");
 
+    QWidget *pageMath = new QWidget();
+    QVBoxLayout *layoutMath = new QVBoxLayout(pageMath);
+
+    QPushButton *calcChromBtn = new QPushButton("Хроматический многочлен");
+    connect(calcChromBtn, &QPushButton::clicked, this, &MainWindow::calculateChromPolynomial);
+
+    QLabel *mathInfo = new QLabel("Внимание: Алгоритм экспоненциальный!\nРаботает только для графов < 13 вершин.");
+    mathInfo->setStyleSheet("color: gray; font-style: italic;");
+    mathInfo->setWordWrap(true);
+
+    layoutMath->addWidget(new QLabel("<b>Алгебраическая теория:</b>"));
+    layoutMath->addWidget(calcChromBtn);
+    layoutMath->addWidget(mathInfo);
+
+    layoutMath->addStretch();
+    toolsPanel->addItem(pageMath, "4. Математика");
+
+
     // СБОРКА ОКОН
     QGroupBox *graphGroup = new QGroupBox("Граф");
     QVBoxLayout *graphLayout = new QVBoxLayout(graphGroup);
     graphLayout->addWidget(view);
 
-    QGroupBox *propsGroup = new QGroupBox("Свойства");
+    QGroupBox *propsGroup = new QGroupBox("Свойства и Лог");
     propsGroup->setFixedWidth(250);
     QVBoxLayout *propsLayout = new QVBoxLayout(propsGroup);
     propsLayout->addWidget(calcButton);
@@ -390,14 +454,30 @@ void MainWindow::setupUI()
 
     // ТУЛБАР
     exportToolBar = new QToolBar("Экспорт", this);
-    saveImageAction = new QAction("IMG", this);
-    saveDotAction = new QAction("DOT", this);
+
+    // === ДОБАВЛЕНЫ НОВЫЕ КНОПКИ ===
+    QAction *saveProjectAction = new QAction("Сохр. Проект", this);
+    QAction *loadProjectAction = new QAction("Загр. Проект", this);
+
+    // Кнопки картинок
+    saveImageAction = new QAction("Экспорт IMG", this);
+    saveDotAction = new QAction("Экспорт DOT", this);
+
+    exportToolBar->addAction(saveProjectAction);
+    exportToolBar->addAction(loadProjectAction);
+    exportToolBar->addSeparator();
     exportToolBar->addAction(saveImageAction);
     exportToolBar->addAction(saveDotAction);
+
     addToolBar(Qt::TopToolBarArea, exportToolBar);
 
     connect(saveImageAction, &QAction::triggered, this, &MainWindow::saveGraphToImage);
     connect(saveDotAction, &QAction::triggered, this, &MainWindow::saveGraphToDotFile);
+
+    // Подключение новых кнопок
+    connect(saveProjectAction, &QAction::triggered, this, &MainWindow::saveProject);
+    connect(loadProjectAction, &QAction::triggered, this, &MainWindow::loadProject);
+
     connect(traversalButton, &QPushButton::clicked, this, &MainWindow::visualizeTraversal);
 
     // ШОРТКАТЫ
@@ -462,34 +542,39 @@ void MainWindow::updateGraphView() {
 }
 
 void MainWindow::rebuildGraphKeepPositions(int removedId) {
-    qDebug() << "VIEW: Перестройка с сохранением позиций. Удален ID:" << removedId;
+    qDebug() << "VIEW: Rebuilding graph...";
 
-    // 1. Сохраняем текущие позиции
+    // 1. Сохраняем позиции И ЦВЕТА
     QVector<QPointF> oldPositions;
+    QVector<QColor> oldColors; // <--- Добавили массив цветов
+
     for (int i = 0; i < nodes.size(); ++i) {
-        if (nodes.contains(i)) oldPositions.append(nodes[i]->pos());
-        else oldPositions.append(QPointF(0,0));
+        if (nodes.contains(i)) {
+            oldPositions.append(nodes[i]->pos());
+            oldColors.append(nodes[i]->getBaseColor()); // Сохраняем цвет
+        } else {
+            oldPositions.append(QPointF(0,0));
+            oldColors.append(QColor(70, 130, 180)); // Заглушка
+        }
     }
 
-    // 2. Строим новый граф
+    // 2. Строим новый граф (цвета сбросятся на синий)
     updateGraphView();
     updateTableFromGraph();
 
-    // 3. Восстанавливаем позиции УМНО (сдвигая индексы)
+    // 3. Восстанавливаем позиции И ЦВЕТА
     int oldIdx = 0;
     int newNodesCount = nodes.size();
 
     for (int newIdx = 0; newIdx < newNodesCount; ++newIdx) {
-        // Если этот индекс был удален в старом массиве, пропускаем его позицию
-        if (oldIdx == removedId) {
-            oldIdx++;
-        }
+        if (oldIdx == removedId) oldIdx++; // Пропускаем удаленный
 
-        // Берем позицию из старого массива
         if (oldIdx < oldPositions.size() && nodes.contains(newIdx)) {
             nodes[newIdx]->setPos(oldPositions[oldIdx]);
-        }
 
+            // Восстанавливаем цвет!
+            nodes[newIdx]->setBaseColor(oldColors[oldIdx]);
+        }
         oldIdx++;
     }
 }
@@ -614,7 +699,7 @@ void MainWindow::visualizeTraversal() {
     else if (msgBox.clickedButton() == dfsButton) traversal = graph->dfs(start);
     else return;
 
-    graphPropertiesDisplay->append("\n=== Обход ===\n" + traversalToString(traversal));
+    logAction("Выполнен обход: " + traversalToString(traversal));
     highlightTraversal(traversal, Qt::green);
 }
 
@@ -643,9 +728,9 @@ void MainWindow::checkCycles() {
             for (int i = 0; i < cycle.size()-1; ++i) highlightEdge(cycle[i], cycle[i+1], color);
             cycleNum++;
         }
-        graphPropertiesDisplay->append(cyclesInfo);
+        logAction(cyclesInfo);
     } else {
-        graphPropertiesDisplay->append("\nГраф ациклический");
+        logAction("Циклы не найдены (ациклический).");
     }
 }
 
@@ -657,7 +742,7 @@ void MainWindow::colorGraph() {
     for (auto it = nodes.begin(); it != nodes.end(); ++it) {
         it.value()->setColor(colorPalette[colors[it.key()] % colorPalette.size()]);
     }
-    graphPropertiesDisplay->append(QString("\nРаскраска завершена."));
+    logAction("Раскраска выполнена.");
 }
 
 void MainWindow::highlightBridgesAndArticulations() {
@@ -667,7 +752,9 @@ void MainWindow::highlightBridgesAndArticulations() {
     for (const auto& bridge : bridges) highlightEdge(bridge.first, bridge.second, Qt::red);
     QVector<int> articulations = graph->getArticulationPoints();
     for (int v : articulations) if (nodes.contains(v)) nodes[v]->setColor(QColor(255, 165, 0));
-    graphPropertiesDisplay->append(QString("\nМостов: %1, Точек сочленения: %2").arg(bridges.size()).arg(articulations.size()));
+
+    QString msg = QString("Найдено: %1 мостов, %2 точек сочленения").arg(bridges.size()).arg(articulations.size());
+    logAction(msg);
 }
 
 void MainWindow::visualizeShortestPath() {
@@ -683,7 +770,7 @@ void MainWindow::visualizeShortestPath() {
     else {
         QStringList pathStr;
         for (int v : path) pathStr << QString::number(v + 1);
-        graphPropertiesDisplay->append(QString("\nПуть: %1").arg(pathStr.join(" -> ")));
+        logAction(QString("Найден кратчайший путь: %1").arg(pathStr.join(" -> ")));
         highlightPath(path, Qt::red);
     }
 }
@@ -696,54 +783,42 @@ void MainWindow::checkBipartite() {
         for (auto it = nodes.begin(); it != nodes.end(); ++it) {
             it.value()->setColor(colors[it.key()] == 0 ? Qt::red : Qt::blue);
         }
-        graphPropertiesDisplay->append("\nГраф двудольный");
+        logAction("Результат проверки: Граф двудольный");
     } else {
-        graphPropertiesDisplay->append("\nГраф не двудольный");
+        logAction("Результат проверки: Граф не двудольный");
     }
 }
 
 void MainWindow::onRandomGraphClicked() {
     bool ok;
-    // 1. Спрашиваем количество вершин
     int count = QInputDialog::getInt(this, "Генерация", "Количество вершин:", 5, 2, 50, 1, &ok);
     if (!ok) return;
 
-    // 2. Смотрим на состояние чекбокса
-    // (directedCheckbox мы вынесли в .h файл на предыдущем шаге)
     bool makeDirected = directedCheck->isChecked();
-
-    // Обновляем модель (на всякий случай)
     graph->setDirected(makeDirected);
 
-    // 3. Подготовка таблицы
-    representationCombo->setCurrentIndex(0); // Матрица смежности
+    representationCombo->setCurrentIndex(0);
     resizeMatrixTable(count, count);
     updatingMatrix = true;
 
     saveToHistory();
 
-    // Очистка
     for(int i=0; i<count; ++i)
         for(int j=0; j<count; ++j)
             if(auto it = matrixTable->item(i,j)) it->setText("0");
 
-    // 4. Генерация
     if (makeDirected) {
-        // ОРИЕНТИРОВАННЫЙ: заполняем каждую ячейку независимо
         for (int i = 0; i < count; ++i) {
             for (int j = 0; j < count; ++j) {
                 if (i == j) continue;
-                // Вероятность 20% (чуть меньше, чтобы не было каши из стрелок)
                 if (QRandomGenerator::global()->bounded(100) < 20) {
                     if (auto item = matrixTable->item(i, j)) item->setText("1");
                 }
             }
         }
     } else {
-        // ОБЫЧНЫЙ: заполняем симметрично
         for (int i = 0; i < count; ++i) {
             for (int j = i + 1; j < count; ++j) {
-                // Вероятность 30%
                 if (QRandomGenerator::global()->bounded(100) < 30) {
                     if (auto item1 = matrixTable->item(i, j)) item1->setText("1");
                     if (auto item2 = matrixTable->item(j, i)) item2->setText("1");
@@ -755,14 +830,17 @@ void MainWindow::onRandomGraphClicked() {
     updatingMatrix = false;
     onGenerateClicked();
 
-    statusLabel->setText(QString("Сгенерирован %1 граф").arg(makeDirected ? "орграф" : "обычный"));
+    logAction(QString("Сгенерирован %1 граф (%2 вершин)").arg(makeDirected ? "орграф" : "обычный").arg(count));
 }
+
+// Добавьте в начало файла, если нет
+#include <QtMath>
 
 void MainWindow::applyLayout()
 {
     if (nodes.isEmpty()) return;
 
-    // 1. Выключаем физику
+    // Выключаем физику
     if (physicsTimer->isActive()) {
         physicsTimer->stop();
         QList<QPushButton*> btns = this->findChildren<QPushButton*>();
@@ -771,62 +849,208 @@ void MainWindow::applyLayout()
 
     int type = layoutCombo->currentIndex();
     int n = nodes.size();
-    int cx = 0, cy = 0;
-
-    // Группа для одновременной анимации всех узлов
     QParallelAnimationGroup *animGroup = new QParallelAnimationGroup;
     bool animate = useAnimationCheckbox->isChecked();
 
-    for (int i = 0; i < n; ++i) {
-        if (!nodes.contains(i)) continue; // На всякий случай
+    QMap<int, QPointF> newPositions;
 
-        QPointF targetPos;
+    // Вспомогательные переменные
+    const auto& matrix = graph->adjacencyMatrix();
+    int cx = 0, cy = 0;
 
-        // Расчет позиции (То же самое, что и было)
-        if (type == 0) { // Circular
-            double radius = n * 40;
-            if (radius < 200) radius = 200;
+    // --- 0. CIRCULAR (По кругу) ---
+    if (type == 0) {
+        double radius = qMax(200.0, n * 40.0);
+        for (int i = 0; i < n; ++i) {
             double angle = 2 * M_PI * i / n;
-            targetPos = QPointF(cx + radius * cos(angle), cy + radius * sin(angle));
+            newPositions[i] = QPointF(radius * cos(angle), radius * sin(angle));
         }
-        else if (type == 1) { // Grid
-            int cols = ceil(sqrt(n));
-            int spacing = 150;
-            double offsetX = (cols - 1) * spacing / 2.0;
-            double offsetY = (ceil((double)n/cols) - 1) * spacing / 2.0;
-            targetPos = QPointF(cx + (i % cols) * spacing - offsetX, cy + (i / cols) * spacing - offsetY);
+    }
+    // --- 1. GRID (Сетка) ---
+    else if (type == 1) {
+        int cols = ceil(sqrt(n));
+        int spacing = 150;
+        double offsetX = (cols - 1) * spacing / 2.0;
+        double offsetY = (ceil((double)n/cols) - 1) * spacing / 2.0;
+        for (int i = 0; i < n; ++i) {
+            newPositions[i] = QPointF((i % cols) * spacing - offsetX, (i / cols) * spacing - offsetY);
         }
-        else if (type == 2) { // Random
-            targetPos = QPointF(QRandomGenerator::global()->bounded(-400, 401),
-                                QRandomGenerator::global()->bounded(-400, 401));
+    }
+    // --- 2. RANDOM (Случайная) ---
+    else if (type == 2) {
+        for (int i = 0; i < n; ++i) {
+            newPositions[i] = QPointF(QRandomGenerator::global()->bounded(-400, 401),
+                                      QRandomGenerator::global()->bounded(-400, 401));
+        }
+    }
+    // --- 3. HIERARCHICAL (Дерево) ---
+    else if (type == 3) {
+        // (Ваш старый код BFS по уровням, который я давал раньше. Если его нет, скопируйте из прошлого ответа или используйте заглушку)
+        // Для краткости здесь упрощенная версия:
+        QVector<int> levels(n, -1);
+        QQueue<int> q; q.enqueue(0); levels[0] = 0;
+        QVector<bool> vis(n, false); vis[0] = true;
+
+        while(!q.isEmpty()){
+            int u = q.dequeue();
+            for(int v=0; v<n; ++v) if(matrix[u][v] && !vis[v]) {
+                vis[v]=true; levels[v]=levels[u]+1; q.enqueue(v);
+            }
         }
 
-        // === ПРИМЕНЕНИЕ ===
+        QMap<int, int> levelCounts;
+        for(int i=0; i<n; ++i) {
+            int lvl = (levels[i] == -1) ? 0 : levels[i]; // Изолированные на 0 уровень
+            int posInLevel = levelCounts[lvl]++;
+            newPositions[i] = QPointF(posInLevel * 100 - (lvl * 50), lvl * 120 - 200);
+        }
+    }
+    // --- 4. BIPARTITE (Двудольная) ---
+    else if (type == 4) {
+        if (!graph->isBipartite()) {
+            QMessageBox::warning(this, "Ошибка", "Граф не является двудольным!");
+            // Фолбэк на круговую
+            layoutCombo->setCurrentIndex(0); applyLayout(); return;
+        }
+
+        QVector<int> colors = graph->bipartiteColoring();
+        int leftCount = 0, rightCount = 0;
+
+        for (int i = 0; i < n; ++i) {
+            if (colors[i] == 0) {
+                newPositions[i] = QPointF(-200, leftCount * 80 - 200);
+                leftCount++;
+            } else {
+                newPositions[i] = QPointF(200, rightCount * 80 - 200);
+                rightCount++;
+            }
+        }
+        // Центровка по вертикали
+        double leftOffset = (leftCount * 80) / 2.0;
+        double rightOffset = (rightCount * 80) / 2.0;
+        for (int i = 0; i < n; ++i) {
+            if (colors[i] == 0) newPositions[i] += QPointF(0, -leftOffset + 200 + 40);
+            else newPositions[i] += QPointF(0, -rightOffset + 200 + 40);
+        }
+    }
+    // --- 5. STAR / WHEEL (Звезда) ---
+    else if (type == 5) {
+        // Ищем вершину с макс степенью
+        QVector<int> degrees = graph->calculateDegrees();
+        int centerNode = 0;
+        int maxDeg = -1;
+        for(int i=0; i<n; ++i) if(degrees[i] > maxDeg) { maxDeg = degrees[i]; centerNode = i; }
+
+        newPositions[centerNode] = QPointF(0, 0);
+
+        double radius = 250;
+        int current = 0;
+        int outerCount = n - 1;
+        if (outerCount < 1) outerCount = 1;
+
+        for (int i = 0; i < n; ++i) {
+            if (i == centerNode) continue;
+            double angle = 2 * M_PI * current / outerCount;
+            newPositions[i] = QPointF(radius * cos(angle), radius * sin(angle));
+            current++;
+        }
+    }
+    // --- 6. TUTTE / BARYCENTRIC (Исправленная "Спектральная") ---
+    else if (type == 6) {
+        // 1. Выбираем 3 "якоря" (Anchor Nodes), чтобы растянуть граф
+        // Берем вершины с равным шагом, чтобы они были распределены
+        int anchor1 = 0;
+        int anchor2 = n / 3;
+        int anchor3 = (2 * n) / 3;
+
+        // Если вершин мало, логика простая, но для n >= 3 это сработает
+        if (n < 3) { // Фолбэк для 2 вершин
+             newPositions[0] = QPointF(-100, 0);
+             if (n > 1) newPositions[1] = QPointF(100, 0);
+        }
+        else {
+            // 2. Расставляем якоря треугольником
+            double radius = 250;
+            newPositions[anchor1] = QPointF(0, -radius);              // Верх
+            newPositions[anchor2] = QPointF(-radius * 0.866, radius * 0.5); // Лево-Низ
+            newPositions[anchor3] = QPointF(radius * 0.866, radius * 0.5);  // Право-Низ
+
+            // Инициализируем остальные в центре (чтобы не улетели при старте)
+            for (int i = 0; i < n; ++i) {
+                if (i != anchor1 && i != anchor2 && i != anchor3) {
+                    newPositions[i] = QPointF(0, 0);
+                }
+            }
+
+            // 3. Итерации (Релаксация)
+            // Все узлы, кроме якорей, двигаются в среднюю точку своих соседей
+            for (int iter = 0; iter < 100; ++iter) {
+                for (int i = 0; i < n; ++i) {
+                    // Якоря не трогаем! Они держат "каркас"
+                    if (i == anchor1 || i == anchor2 || i == anchor3) continue;
+
+                    double sumX = 0, sumY = 0;
+                    int count = 0;
+
+                    for (int j = 0; j < n; ++j) {
+                        // Если есть связь (ориентированная или нет - считаем как неориент)
+                        bool connected = (matrix[i][j] != 0);
+                        if (!connected && graph->getDirected()) connected = (matrix[j][i] != 0);
+
+                        if (connected) {
+                            sumX += newPositions[j].x();
+                            sumY += newPositions[j].y();
+                            count++;
+                        }
+                    }
+
+                    if (count > 0) {
+                        newPositions[i] = QPointF(sumX / count, sumY / count);
+                    }
+                }
+            }
+        }
+    }
+    // --- 7. SORTED CIRCLE (Умное кольцо) ---
+    else if (type == 7) {
+        // Сортируем вершины по степени
+        QVector<int> degrees = graph->calculateDegrees();
+        QVector<int> sortedIndices(n);
+        std::iota(sortedIndices.begin(), sortedIndices.end(), 0);
+
+        std::sort(sortedIndices.begin(), sortedIndices.end(), [&](int a, int b){
+            return degrees[a] > degrees[b];
+        });
+
+        double radius = qMax(200.0, n * 40.0);
+        for (int i = 0; i < n; ++i) {
+            int nodeId = sortedIndices[i];
+            double angle = 2 * M_PI * i / n;
+            newPositions[nodeId] = QPointF(radius * cos(angle), radius * sin(angle));
+        }
+    }
+
+    // === ПРИМЕНЕНИЕ ===
+    for (int i = 0; i < n; ++i) {
+        if (!nodes.contains(i)) continue;
+
+        QPointF target = newPositions.value(i, QPointF(0,0));
+
         if (animate) {
-            // Создаем анимацию свойства "pos"
             QPropertyAnimation *anim = new QPropertyAnimation(nodes[i], "pos");
-            anim->setDuration(2000); //2 секунды
+            anim->setDuration(1500);
             anim->setStartValue(nodes[i]->pos());
-            anim->setEndValue(targetPos);
-            anim->setEasingCurve(QEasingCurve::OutExpo); // Красивое замедление в конце
+            anim->setEndValue(target);
+            anim->setEasingCurve(QEasingCurve::OutExpo);
             animGroup->addAnimation(anim);
         } else {
-            // Мгновенный телепорт
-            nodes[i]->setPos(targetPos);
+            nodes[i]->setPos(target);
         }
     }
 
-    if (animate) {
-        // Запускаем группу анимаций
-        // DeleteWhenStopped удалит animGroup и все вложенные анимации после завершения (очистка памяти)
-        animGroup->start(QAbstractAnimation::DeleteWhenStopped);
-    } else {
-        // Если анимации нет, группу нужно удалить сразу (так как мы её создали, но не запустили)
-        delete animGroup;
-        view->centerOn(0, 0); // Центрируем сразу
-    }
+    if (animate) animGroup->start(QAbstractAnimation::DeleteWhenStopped);
+    else { delete animGroup; view->centerOn(0, 0); }
 }
-
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Свойства и Матрица) ===
 
 void MainWindow::calculateGraphProperties() {
@@ -836,24 +1060,20 @@ void MainWindow::calculateGraphProperties() {
     text += QString("Вершин: %1\n").arg(graph->nodeCount());
     text += QString("Рёбер: %1\n").arg(graph->edgeCount());
 
-    // ИСПРАВЛЕНИЕ: Честный вывод типа графа
     QString typeStr = graph->getDirected() ? "Ориентированный" : "Неориентированный";
     text += QString("Тип: %1\n").arg(typeStr);
 
     QVector<int> degrees = graph->calculateDegrees();
     text += "\n=== Степени вершин ===\n";
     for(int i=0; i<degrees.size(); ++i) {
-        // Для ориентированного графа это исходящая степень (out-degree)
         text += QString("В%1: %2\n").arg(i+1).arg(degrees[i]);
     }
 
     text += QString("Полный: %1\n").arg(graph->isComplete() ? "Да" : "Нет");
 
-    // Метрики
     int rad = graph->getRadius();
     int diam = graph->getDiameter();
 
-    // Если граф ориентированный и не сильно связный, радиус может быть бесконечным
     if (rad != INT_MAX) {
         text += QString("\nРадиус: %1\nДиаметр: %2\nМедиана: В%3\n").arg(rad).arg(diam).arg(graph->getMedian()+1);
 
@@ -870,7 +1090,6 @@ void MainWindow::calculateGraphProperties() {
     text += QString("\nЭйлеров: %1").arg(graph->isEulerian()?"Да":"Нет");
     text += QString("\nСвязный: %1").arg(graph->isConnected()?"Да":"Нет");
 
-    // Критические элементы
     auto art = graph->getArticulationPoints();
     text += QString("\n\nТочки сочленения: ") + (art.isEmpty() ? "Нет" : "");
     for(int v : art) text += QString("%1 ").arg(v+1);
@@ -881,13 +1100,10 @@ void MainWindow::calculateGraphProperties() {
 
     text += QString("\nДвудольный: %1").arg(graph->isBipartite()?"Да":"Нет");
 
-    // Матрица расстояний
     text += "\n\n=== Матрица расстояний ===\n    ";
     auto dist = graph->getDistanceMatrix();
-    // Заголовок
     for(int i=0; i<dist.size(); ++i) text += QString("%1 ").arg(i+1, 3);
     text += "\n";
-    // Строки
     for(int i=0; i<dist.size(); ++i) {
         text += QString("%1: ").arg(i+1, 2);
         for(int j=0; j<dist[i].size(); ++j) {
@@ -896,7 +1112,6 @@ void MainWindow::calculateGraphProperties() {
         text += "\n";
     }
 
-    // Компоненты связности
     auto comp = graph->findConnectedComponents();
     text += QString("\nКомпонент связности: %1\n").arg(comp.size());
     for(int i=0; i<comp.size(); ++i) {
@@ -905,7 +1120,6 @@ void MainWindow::calculateGraphProperties() {
         text += QString("К%1: %2\n").arg(i+1).arg(l.join(", "));
     }
 
-    // Раскраска
     auto clr = graph->greedyColoring();
     int maxC = 0;
     if(!clr.isEmpty()) maxC = *std::max_element(clr.begin(), clr.end()) + 1;
@@ -1125,13 +1339,19 @@ bool MainWindow::parseMatrix() {
 
 void MainWindow::onGenerateClicked() {
     saveToHistory();
-    if (parseMatrix()) updateGraphView();
+    if (parseMatrix()) {
+        updateGraphView();
+        logAction("Граф перестроен из таблицы.");
+    }
 }
 
 // === ИСТОРИЯ (UNDO/REDO) ===
 
 
 void MainWindow::saveToHistory() {
+    if (graph->nodeCount() == 0) {
+        return;
+    }
     qDebug() << "HISTORY: Сохранение состояния...";
     GraphState state;
     state.matrix = graph->adjacencyMatrix();
@@ -1139,6 +1359,7 @@ void MainWindow::saveToHistory() {
 
     for(auto it = nodes.begin(); it != nodes.end(); ++it) {
         state.positions.insert(it.key(), it.value()->pos());
+        state.colors.insert(it.key(), it.value()->getBaseColor());
     }
 
     undoStack.push(state);
@@ -1163,6 +1384,10 @@ void MainWindow::restoreState(const GraphState &state) {
         int id = it.key();
         if (nodes.contains(id)) {
             nodes[id]->setPos(it.value());
+
+            if (state.colors.contains(id)) {
+                nodes[id]->setBaseColor(state.colors[id]);
+            }
         }
     }
 }
@@ -1173,12 +1398,19 @@ void MainWindow::undo() {
         return;
     }
 
+    // 1. Сохраняем ТЕКУЩЕЕ состояние в стек Redo (чтобы можно было вернуться)
     GraphState currentState;
     currentState.matrix = graph->adjacencyMatrix();
     currentState.isDirected = graph->getDirected();
-    for(auto it = nodes.begin(); it != nodes.end(); ++it) currentState.positions.insert(it.key(), it.value()->pos());
+
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) {
+        currentState.positions.insert(it.key(), it.value()->pos());
+        currentState.colors.insert(it.key(), it.value()->getBaseColor()); // <--- ДОБАВЛЕНО
+    }
+
     redoStack.push(currentState);
 
+    // 2. Восстанавливаем прошлое
     GraphState prevState = undoStack.pop();
     restoreState(prevState);
 }
@@ -1186,12 +1418,383 @@ void MainWindow::undo() {
 void MainWindow::redo() {
     if (redoStack.isEmpty()) return;
 
+    // 1. Сохраняем ТЕКУЩЕЕ состояние в стек Undo
     GraphState currentState;
     currentState.matrix = graph->adjacencyMatrix();
     currentState.isDirected = graph->getDirected();
-    for(auto it = nodes.begin(); it != nodes.end(); ++it) currentState.positions.insert(it.key(), it.value()->pos());
+
+    for(auto it = nodes.begin(); it != nodes.end(); ++it) {
+        currentState.positions.insert(it.key(), it.value()->pos());
+        currentState.colors.insert(it.key(), it.value()->getBaseColor()); // <--- ДОБАВЛЕНО
+    }
+
     undoStack.push(currentState);
 
+    // 2. Восстанавливаем будущее
     GraphState nextState = redoStack.pop();
     restoreState(nextState);
+}
+// mainwindow.cpp
+
+// 1. Загрузка из конфига
+
+void MainWindow::loadSettings() {
+    QString iniPath = QCoreApplication::applicationDirPath() + "/config.ini";
+    QSettings settings(iniPath, QSettings::IniFormat);
+
+    // Читаем режим (по умолчанию 0)
+    currentEditMode = settings.value("Editor/EditMode", 0).toInt();
+
+    // Если настройки нет - создаем запись, чтобы пользователь знал о ней
+    if (!settings.contains("Editor/EditMode")) {
+        settings.setValue("Editor/EditMode", 0);
+        settings.sync();
+    }
+    qDebug() << "Settings: Loaded EditMode =" << currentEditMode;
+}
+// 2. Изменение веса ребра (для меню)
+void MainWindow::changeEdgeWeight(Edge* edge) {
+    if (!edge) return;
+
+    bool ok;
+    // Берем текущий вес из матрицы
+    int u = edge->sourceNode()->getId();
+    int v = edge->destNode()->getId();
+    int oldWeight = graph->adjacencyMatrix()[u][v];
+
+    int newWeight = QInputDialog::getInt(this, "Вес ребра",
+                                       "Введите новый вес:",
+                                       oldWeight, -10000, 10000, 1, &ok);
+    if (ok) {
+        saveToHistory();
+        graph->addEdge(u, v, newWeight);
+        rebuildGraphKeepPositions();
+        qDebug() << "Edit: Weight changed to" << newWeight;
+    }
+}
+// 3. Показ контекстного меню
+void MainWindow::showContextMenu(const QPoint& pos) {
+    QMenu contextMenu(this);
+
+    // Стиль для иконок
+    auto style = QApplication::style();
+
+    // Определяем объект под курсором
+    QPointF scenePos = view->mapToScene(view->mapFromGlobal(pos));
+    QGraphicsItem *item = scene->itemAt(scenePos, QTransform());
+
+    // --- ЛЯМБДА ДЛЯ СОЗДАНИЯ МЕНЮ ЦВЕТОВ ---
+    // Это создает красивое подменю с цветными квадратиками
+    auto addColorMenu = [&](QMenu* parent, std::function<void(QColor)> callback) {
+        QMenu* colorMenu = parent->addMenu(style->standardIcon(QStyle::SP_DesktopIcon), "Изменить цвет");
+
+        // Список быстрых цветов
+        QList<QPair<QString, QColor>> colors = {
+            {"Красный", Qt::red}, {"Синий", Qt::blue}, {"Зеленый", Qt::green},
+            {"Желтый", Qt::yellow}, {"Оранжевый", QColor(255, 165, 0)},
+            {"Фиолетовый", Qt::magenta}, {"Серый", Qt::gray}
+        };
+
+        for (auto pair : colors) {
+            // Рисуем маленький цветной квадратик для иконки
+            QPixmap pixmap(16, 16);
+            pixmap.fill(pair.second);
+
+            QAction* action = colorMenu->addAction(QIcon(pixmap), pair.first);
+            connect(action, &QAction::triggered, [=](){ callback(pair.second); });
+        }
+
+        colorMenu->addSeparator();
+        QAction* customAction = colorMenu->addAction("Выбрать другой...");
+        connect(customAction, &QAction::triggered, [=](){
+            QColor c = QColorDialog::getColor(Qt::white, this, "Выберите цвет");
+            if(c.isValid()) callback(c);
+        });
+    };
+
+    // ==========================================
+    // ВАРИАНТ 1: УЗЕЛ
+    // ==========================================
+    if (Node *node = dynamic_cast<Node*>(item)) {
+        // Заголовок (неактивный пункт)
+        QAction* title = contextMenu.addAction(QString("Узел #%1").arg(node->getId() + 1));
+        title->setEnabled(false);
+        contextMenu.addSeparator();
+
+        // 1. Связь
+        QAction *actConnect = contextMenu.addAction(
+            style->standardIcon(QStyle::SP_ArrowRight), "Начать связь");
+
+        connect(actConnect, &QAction::triggered, [=](){
+            selectedNode = node;
+            node->setColor(Qt::green);
+            statusLabel->setText("Режим V2: Кликните левой кнопкой по второму узлу");
+        });
+
+        // 2. Цвет (Подменю)
+        addColorMenu(&contextMenu, [=](QColor c){
+            saveToHistory();
+            node->setBaseColor(c);
+        });
+
+        contextMenu.addSeparator();
+
+        // 3. Удаление
+        QAction *actDelete = contextMenu.addAction(
+            style->standardIcon(QStyle::SP_TrashIcon), "Удалить узел");
+
+        connect(actDelete, &QAction::triggered, [=](){
+            saveToHistory();
+            int id = node->getId();
+            clearSelectionState();
+            graph->removeVertex(id);
+            rebuildGraphKeepPositions(id);
+        });
+    }
+
+    // ==========================================
+    // ВАРИАНТ 2: РЕБРО
+    // ==========================================
+    else if (Edge *edge = dynamic_cast<Edge*>(item)) {
+        // Узнаем вес для заголовка
+        int u = edge->sourceNode()->getId();
+        int v = edge->destNode()->getId();
+        int weight = graph->adjacencyMatrix()[u][v];
+
+        QAction* title = contextMenu.addAction(QString("Ребро (%1-%2)").arg(u+1).arg(v+1));
+        title->setEnabled(false);
+        contextMenu.addSeparator();
+
+        // 1. Вес
+        QAction *actWeight = contextMenu.addAction(
+            style->standardIcon(QStyle::SP_FileDialogDetailedView),
+            QString("Изменить вес (Тек: %1)").arg(weight));
+
+        connect(actWeight, &QAction::triggered, [=](){ changeEdgeWeight(edge); });
+
+        // 2. Цвет
+        addColorMenu(&contextMenu, [=](QColor c){
+            edge->setColor(c);
+        });
+
+        contextMenu.addSeparator();
+
+        // 3. Удаление
+        QAction *actDelete = contextMenu.addAction(
+            style->standardIcon(QStyle::SP_DialogCancelButton), "Удалить связь");
+
+        connect(actDelete, &QAction::triggered, [=](){
+            saveToHistory();
+            graph->removeEdge(u, v);
+            rebuildGraphKeepPositions();
+        });
+    }
+
+    // ==========================================
+    // ВАРИАНТ 3: ПУСТОТА
+    // ==========================================
+    else {
+        QAction *actAdd = contextMenu.addAction(
+            style->standardIcon(QStyle::SP_FileIcon), "Добавить вершину");
+
+        connect(actAdd, &QAction::triggered, [=](){
+            saveToHistory();
+            graph->addVertex();
+            rebuildGraphKeepPositions();
+            int lastIdx = graph->nodeCount() - 1;
+            if (nodes.contains(lastIdx)) nodes[lastIdx]->setPos(scenePos);
+        });
+
+        contextMenu.addSeparator();
+        QAction *actLayout = contextMenu.addAction("Выровнять (Сетка)");
+        connect(actLayout, &QAction::triggered, [=](){
+            layoutCombo->setCurrentIndex(1); // Grid
+            applyLayout();
+        });
+    }
+
+    // Показываем
+    contextMenu.exec(pos);
+}
+
+void MainWindow::saveProject() {
+    if (!graph) return;
+
+    QString fileName = QFileDialog::getSaveFileName(this, "Сохранить проект", "", "Graph Project (*.json)");
+    if (fileName.isEmpty()) return;
+
+    if (!fileName.endsWith(".json", Qt::CaseInsensitive)) {
+        fileName += ".json";
+    }
+
+    QJsonObject rootObj;
+    rootObj["directed"] = graph->getDirected();
+
+    QJsonArray nodesArray;
+    for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+        QJsonObject nodeObj;
+        nodeObj["id"] = it.key();
+        nodeObj["x"] = it.value()->pos().x();
+        nodeObj["y"] = it.value()->pos().y();
+        nodeObj["color"] = it.value()->getBaseColor().name();
+        nodesArray.append(nodeObj);
+    }
+    rootObj["nodes"] = nodesArray;
+
+    QJsonArray edgesArray;
+    const auto& matrix = graph->adjacencyMatrix();
+    bool isDirected = graph->getDirected();
+
+    for (int i = 0; i < matrix.size(); ++i) {
+        int startJ = isDirected ? 0 : i;
+        for (int j = startJ; j < matrix[i].size(); ++j) {
+            if (matrix[i][j] != 0) {
+                QJsonObject edgeObj;
+                edgeObj["u"] = i;
+                edgeObj["v"] = j;
+                edgeObj["w"] = matrix[i][j];
+                edgesArray.append(edgeObj);
+            }
+        }
+    }
+    rootObj["edges"] = edgesArray;
+
+    QJsonArray logsArray;
+    for (const QString &msg : actionLog) {
+        logsArray.append(msg);
+    }
+    rootObj["logs"] = logsArray;
+
+    QJsonDocument doc(rootObj);
+    QFile file(fileName);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+        file.close();
+        logAction("Проект успешно сохранен.");
+    }
+}
+
+void MainWindow::loadProject() {
+    QString fileName = QFileDialog::getOpenFileName(this, "Загрузить проект", "", "Graph Project (*.json)");
+    if (fileName.isEmpty()) return;
+
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) return;
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (doc.isNull()) return;
+
+    QJsonObject rootObj = doc.object();
+
+    stopAndReset();
+    actionLog.clear();
+    graphPropertiesDisplay->clear();
+
+    bool directed = rootObj["directed"].toBool();
+    graph->setDirected(directed);
+    if (directedCheck) directedCheck->setChecked(directed);
+
+    QJsonArray nodesArr = rootObj["nodes"].toArray();
+    int nodeCount = nodesArr.size();
+
+    QVector<QVector<int>> matrix(nodeCount, QVector<int>(nodeCount, 0));
+
+    QJsonArray edgesArr = rootObj["edges"].toArray();
+    for (const auto &val : edgesArr) {
+        QJsonObject edge = val.toObject();
+        int u = edge["u"].toInt();
+        int v = edge["v"].toInt();
+        int w = edge["w"].toInt();
+        if (u < nodeCount && v < nodeCount) {
+            matrix[u][v] = w;
+            if (!directed) matrix[v][u] = w;
+        }
+    }
+
+    graph->createFromAdjacencyMatrix(matrix);
+
+    updateGraphView();
+
+    for (const auto &val : nodesArr) {
+        QJsonObject nodeObj = val.toObject();
+        int id = nodeObj["id"].toInt();
+        if (nodes.contains(id)) {
+            nodes[id]->setPos(nodeObj["x"].toDouble(), nodeObj["y"].toDouble());
+            if (nodeObj.contains("color")) {
+                QColor c(nodeObj["color"].toString());
+                if (c.isValid()) nodes[id]->setBaseColor(c);
+           }
+        }
+    }
+
+    QJsonArray logsArr = rootObj["logs"].toArray();
+    graphPropertiesDisplay->append("<b>=== ИСТОРИЯ ПРОЕКТА ===</b>");
+    for (const auto &val : logsArr) {
+        QString msg = val.toString();
+        actionLog.append(msg);
+        graphPropertiesDisplay->append(msg);
+    }
+
+    updateTableFromGraph();
+    logAction("Проект загружен.");
+}
+
+void MainWindow::visualizeMST() {
+    if (!graph || graph->nodeCount() == 0) return;
+
+    // Сбрасываем цвета, но НЕ останавливаем физику (можно смотреть MST на живом графе)
+    resetEdgeColors();
+
+    QVector<QPair<int, int>> mst = graph->getPrimMST();
+
+    if (mst.isEmpty()) {
+        logAction("MST не найдено (граф пуст или изолирован).");
+        return;
+    }
+
+    // Подсветка
+    int totalWeight = 0;
+    for (auto edge : mst) {
+        int u = edge.first;
+        int v = edge.second;
+        highlightEdge(u, v, QColor(255, 140, 0)); // Оранжевый
+
+        // Суммируем вес (учитываем, что матрица может быть ориентированной)
+        int w = graph->adjacencyMatrix()[u][v];
+        if (w == 0 && !graph->getDirected()) w = graph->adjacencyMatrix()[v][u];
+        totalWeight += w;
+    }
+
+    logAction(QString("Построено Минимальное Остовное Дерево. Общий вес: %1").arg(totalWeight));
+}
+
+void MainWindow::calculateChromPolynomial() {
+    if (!graph) return;
+
+    if (graph->nodeCount() > 12) {
+        QMessageBox::warning(this, "Слишком сложно",
+            "Граф слишком большой (>12 вершин).\nВычисление многочлена займет вечность.");
+        return;
+    }
+
+    // Считаем
+    QApplication::setOverrideCursor(Qt::WaitCursor); // Часики
+    Polynomial poly = graph->getChromaticPolynomial();
+    QApplication::restoreOverrideCursor();
+
+    QString rawString = poly.toString();
+
+    // Заменяем HTML-степени на обычный значок ^
+    // Пример: x<sup>2</sup> -> x^2
+    rawString.replace("<sup>", "^");
+    rawString.replace("</sup>", "");
+
+    QString result = QString("\n=== Хроматический многочлен ===\n%1").arg(rawString);
+
+    logAction(result);
+
+    logAction("Вычислен хроматический многочлен.");
 }

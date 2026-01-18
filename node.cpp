@@ -8,7 +8,8 @@
 Node::Node(int id) : id(id)
 {
     // Инициализируем цвет СРАЗУ конкретным значением, а не ссылкой на другую переменную
-    currentColor = QColor(70, 130, 180);
+    baseColor = QColor(70, 130, 180);
+    visualColor = baseColor;
 
     setFlag(ItemIsMovable);
     setFlag(ItemSendsGeometryChanges);
@@ -23,15 +24,21 @@ void Node::addEdge(Edge *edge) {
 }
 
 void Node::setColor(const QColor &color) {
-    currentColor = color;
-    update(); // Перерисовать
+    visualColor = color;
+    update();
 }
 
 void Node::resetColor() {
-    // Явно задаем стандартный цвет (SteelBlue)
-    currentColor = QColor(70, 130, 180);
+    visualColor = baseColor;
     update();
 }
+
+void Node::setBaseColor(const QColor &color) {
+    baseColor = color;
+    visualColor = baseColor; // Сразу применяем
+    update();
+}
+
 
 QRectF Node::boundingRect() const {
     return QRectF(-20, -20, 40, 40);
@@ -48,11 +55,11 @@ void Node::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWid
     if (option->state & QStyle::State_Sunken) {
         gradient.setCenter(3, 3);
         gradient.setFocalPoint(3, 3);
-        gradient.setColorAt(1, currentColor.lighter(120));
-        gradient.setColorAt(0, currentColor.darker(120));
+        gradient.setColorAt(1, visualColor.lighter(120));
+        gradient.setColorAt(0, visualColor.darker(120));
     } else {
-        gradient.setColorAt(0, currentColor);
-        gradient.setColorAt(1, currentColor.darker(110));
+        gradient.setColorAt(0, visualColor);
+        gradient.setColorAt(1, visualColor.darker(110));
     }
 
     painter->setBrush(gradient);
