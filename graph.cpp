@@ -337,32 +337,6 @@ QVector<QVector<int>> Graph::removeDuplicateCycles(QVector<QVector<int>>& cycles
     return cycles;
 }
 
-void Graph::findAllCyclesUtil(int v, int start, int depth, QVector<bool>& visited,
-                            QVector<int>& path, QVector<QVector<int>>& cycles) const {
-    visited[v] = true;
-    path.push_back(v);
-
-    // Проверяем всех соседей
-    for (int u = 0; u < adjMatrix.size(); ++u) {
-        if (adjMatrix[v][u] > 0) { // Есть ребро v-u
-            if (u == start && path.size() > 2) {
-                // Нашли цикл - добавляем копию пути
-                QVector<int> cycle = path;
-                cycle.push_back(start); // Замыкаем цикл
-                cycles.push_back(cycle);
-            }
-            else if (!visited[u] && depth < adjMatrix.size()) {
-                // Продолжаем поиск только если не превышена максимальная глубина
-                findAllCyclesUtil(u, start, depth + 1, visited, path, cycles);
-            }
-        }
-    }
-
-    // Откатываем изменения
-    path.pop_back();
-    visited[v] = false;
-}
-
 QVector<int> Graph::bipartiteColoring() const {
     int n = adjMatrix.size();
     QVector<int> color(n, -1);
@@ -825,4 +799,119 @@ void Graph::addEdge(int u, int v, int weight) {
 
 void Graph::removeEdge(int u, int v) {
     addEdge(u, v, 0); // addEdge уже делает копию, так что тут менять не надо
+}
+
+QVector<QPair<int, int>> Graph::getPrimMST() const {
+    QVector<QPair<int, int>> mstEdges;
+    int n = adjMatrix.size();
+    if (n == 0) return mstEdges;
+
+    // Массив для хранения минимального веса ребра до вершины
+    QVector<int> key(n, INT_MAX);
+    // Массив родителей (откуда пришли)
+    QVector<int> parent(n, -1);
+    // Массив посещенных
+    QVector<bool> inMST(n, false);
+
+    // Начинаем с вершины 0
+    key[0] = 0;
+
+    for (int count = 0; count < n - 1; ++count) {
+        // 1. Ищем вершину с минимальным key, которая еще не в MST
+        int min = INT_MAX, u = -1;
+        for (int v = 0; v < n; ++v) {
+            if (!inMST[v] && key[v] < min) {
+                min = key[v];
+                u = v;
+            }
+        }
+
+        if (u == -1) break; // Граф несвязный
+
+        inMST[u] = true;
+
+        // Если это не корень, добавляем ребро в результат
+        if (parent[u] != -1) {
+            mstEdges.append({parent[u], u});
+        }
+
+        // 2. Обновляем соседей
+        for (int v = 0; v < n; ++v) {
+            int weight = adjMatrix[u][v];
+            // Если есть ребро, v не в MST, и вес меньше текущего известного
+            if (weight > 0 && !inMST[v] && weight < key[v]) {
+                parent[v] = u;
+                key[v] = weight;
+            }
+        }
+    }
+
+    return mstEdges;
+}
+
+Polynomial Graph::getChromaticPolynomial() const {
+    if (adjMatrix.size() > 12) {
+        // Защита от зависания
+        return Polynomial(); // Возвращаем пустоту как ошибку
+    }
+    return calculateChromPoly(adjMatrix);
+}
+
+Polynomial Graph::calculateChromPoly(QVector<QVector<int>> currentMatrix) const {
+    int n = currentMatrix.size();
+
+    // 1. Ищем ребро
+    int u = -1, v = -1;
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            if (currentMatrix[i][j] > 0) {
+                u = i; v = j;
+                break;
+            }
+        }
+        if (u != -1) break;
+    }
+
+    // 2. Если ребер нет -> x^n
+    if (u == -1) {
+        Polynomial res = Polynomial::Number(1);
+        for (int i = 0; i < n; ++i) res = res * Polynomial::X();
+        return res;
+    }
+
+    // 3. Deletion (G - e)
+    QVector<QVector<int>> matrixDel = currentMatrix;
+    matrixDel[u][v] = 0;
+    matrixDel[v][u] = 0;
+    Polynomial pDel = calculateChromPoly(matrixDel);
+
+    // 4. Contraction (G * e)
+    QVector<QVector<int>> matrixContr(n - 1, QVector<int>(n - 1));
+
+    // Лямбда для пересчета индексов
+    auto mapIdx = [&](int oldIdx) {
+        if (oldIdx == v) return u;
+        if (oldIdx > v) return oldIdx - 1;
+        return oldIdx;
+    };
+
+    for (int i = 0; i < n; ++i) {
+        if (i == v) continue;
+        for (int j = 0; j < n; ++j) {
+            if (j == v) continue;
+
+            if (currentMatrix[i][j] > 0) {
+                int newI = mapIdx(i);
+                int newJ = mapIdx(j);
+                if (newI != newJ) {
+                    matrixContr[newI][newJ] = 1;
+                    matrixContr[newJ][newI] = 1;
+                }
+            }
+        }
+    }
+
+    Polynomial pContr = calculateChromPoly(matrixContr);
+
+    return pDel - pContr;
 }

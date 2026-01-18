@@ -19,20 +19,29 @@
 #include <QDateTime>
 #include <QDockWidget>
 #include <QShortcut>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 
 class Graph;
 class Node; // Forward declaration
 class QGraphicsLineItem;
+class Edge;
+
 
 struct GraphState {
     QVector<QVector<int>> matrix; // Связи
     bool isDirected;              // Тип
     QMap<int, QPointF> positions; // Координаты узлов
+    QMap<int, QColor> colors;
 };
 
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
+    QStringList actionLog;
+    void logAction(const QString& message);
+
 
 public:
     MainWindow(QWidget *parent = nullptr);
@@ -61,6 +70,10 @@ private slots:
     void applyLayout();
     void undo();
     void redo();
+    void saveProject(); // Сохранить в JSON
+    void loadProject(); // Загрузить из JSON
+    void visualizeMST();
+    void calculateChromPolynomial();
 
 private:
     void setupUI();
@@ -72,6 +85,11 @@ private:
     void enforceDiagonalZeros();
     void saveToHistory();
     void restoreState(const GraphState &state);
+    int currentEditMode; // 0 = V1 (Classic), 1 = V2 (Context Menu)
+    void loadSettings();
+    void showContextMenu(const QPoint& pos);
+    void changeEdgeWeight(Edge* edge);
+
 
     // Вспомогательные функции
     void resetEdgeColors();
