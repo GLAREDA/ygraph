@@ -398,7 +398,7 @@ void MainWindow::setupUI()
     layoutCombo->addItem("Дерево (Hierarchical)");
     layoutCombo->addItem("Двудольная (Bipartite)");   // 4
     layoutCombo->addItem("Звезда (Star/Wheel)");      // 5
-    layoutCombo->addItem("Спектральная (Spectral)");  // 6
+    layoutCombo->addItem("Барицентрическая (Tutte)");
     layoutCombo->addItem("Умное кольцо (Sorted)");
 
     useAnimationCheckbox = new QCheckBox("Плавная анимация");
@@ -443,8 +443,12 @@ void MainWindow::setupUI()
     QGroupBox *propsGroup = new QGroupBox("Свойства и Лог");
     propsGroup->setFixedWidth(250);
     QVBoxLayout *propsLayout = new QVBoxLayout(propsGroup);
+    QPushButton *distMatrixButton = new QPushButton("Матрица расстояний");
+    distMatrixButton->setToolTip("Открыть матрицу кратчайших расстояний в отдельном окне");
     propsLayout->addWidget(calcButton);
+    propsLayout->addWidget(distMatrixButton);
     propsLayout->addWidget(graphPropertiesDisplay);
+    connect(distMatrixButton, &QPushButton::clicked, this, &MainWindow::showDistanceMatrixDialog);
 
     mainLayout->addWidget(toolsPanel);
     mainLayout->addWidget(graphGroup, 1);
@@ -1797,4 +1801,131 @@ void MainWindow::calculateChromPolynomial() {
     logAction(result);
 
     logAction("Вычислен хроматический многочлен.");
+}
+
+void MainWindow::showDistanceMatrixDialog()
+{
+    if (graph->nodeCount() == 0) {
+        QMessageBox::information(this, "Матрица расстояний", "Граф пуст.");
+        return;
+    }
+
+    auto dist = graph->getDistanceMatrix();
+    int n = dist.size();
+
+    // ── Диалог ───────────────────────────────────────────────────────────────
+    QDialog *dlg = new QDialog(this);
+    dlg->setWindowTitle(QString("Матрица кратчайших расстояний (%1×%1)").arg(n));
+    dlg->setMinimumSize(400, 300);
+    dlg->resize(qMin(80 + n * 65, 1100), qMin(80 + n * 32, 700));
+
+    QVBoxLayout *layout = new QVBoxLayout(dlg);
+
+    // Заголовок
+    QLabel *title = new QLabel(
+        QString("Флойд–Уоршелл · %1 вершин  |  ∞ = вершины не связаны").arg(n));
+    title->setStyleSheet("font-weight: bold; margin-bottom: 4px;");
+    layout->addWidget(title);
+
+    // Таблица
+    QTableWidget *table = new QTableWidget(n, n, dlg);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+
+    // Заголовки строк и столбцов
+    QStringList headers;
+    for (int i = 0; i < n; ++i) headers << QString::number(i + 1);
+    table->setHorizontalHeaderLabels(headers);
+    table->setVerticalHeaderLabels(headers);
+    table->horizontalHeader()->setDefaultSectionSize(58);
+    table->verticalHeader()->setDefaultSectionSize(26);
+    table->horizontalHeader()->setMinimumSectionSize(40);
+
+    // Заполняем значениями
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            QString text;
+            QTableWidgetItem *item;
+            if (dist[i][j] >= 1e17) {
+                text = "∞";
+                item = new QTableWidgetItem(text);
+                item->setForeground(QColor(150, 150, 150));
+            } else {
+                // Показываем без лишних нулей: 3 → "3", 3.5 → "3.5"
+                double v = dist[i][j];
+                text = (v == (int)v) ? QString::number((int)v)
+                                     : QString::number(v, 'g', 5);
+                item = new QTableWidgetItem(text);
+                if (i == j)
+                    item->setBackground(QColor(230, 230, 230));
+            }
+            item->setTextAlignment(Qt::AlignCenter);
+            table->setItem(i, j, item);
+        }
+    }
+
+    // Подсветка минимума в каждой строке (кроме диагонали)
+    for (int i = 0; i < n; ++i) {
+        double rowMin = 1e18;
+        for (int j = 0; j < n; ++j)
+            if (i != j && dist[i][j] < rowMin) rowMin = dist[i][j];
+        for (int j = 0; j < n; ++j) {
+            if (i != j && dist[i][j] == rowMin && rowMin < 1e17)
+                if (auto it = table->item(i, j))
+                    it->setBackground(QColor(198, 239, 206)); // светло-зелёный
+        }
+    }
+
+    layout->addWidget(table);
+
+    // ── Метрики под таблицей ─────────────────────────────────────────────────
+    auto ecc = graph->getEccentricities();
+    double radius   = graph->getRadius();
+    double diameter = graph->getDiameter();
+    int    median   = graph->getMedian();
+
+    QString metrics = QString(
+        "Радиус: <b>%1</b> &nbsp;&nbsp; Диаметр: <b>%2</b> &nbsp;&nbsp; "
+        "Медиана: <b>вершина %3</b>")
+        .arg(radius).arg(diameter).arg(median + 1);
+
+    QLabel *metricsLabel = new QLabel(metrics);
+    metricsLabel->setTextFormat(Qt::RichText);
+    metricsLabel->setStyleSheet("margin-top: 6px;");
+    layout->addWidget(metricsLabel);
+
+    // ── Кнопки ───────────────────────────────────────────────────────────────
+    QHBoxLayout *btnLayout = new QHBoxLayout();
+
+    // Копировать как CSV
+    QPushButton *copyBtn = new QPushButton("Копировать CSV");
+    connect(copyBtn, &QPushButton::clicked, [=]() {
+        QString csv;
+        csv += ";";
+        for (int j = 0; j < n; ++j) csv += QString::number(j+1) + ";";
+        csv += "\n";
+        for (int i = 0; i < n; ++i) {
+            csv += QString::number(i+1) + ";";
+            for (int j = 0; j < n; ++j) {
+                csv += (dist[i][j] >= 1e17 ? "inf" :
+                        (dist[i][j] == (int)dist[i][j] ?
+                         QString::number((int)dist[i][j]) :
+                         QString::number(dist[i][j], 'g', 5)));
+                csv += ";";
+            }
+            csv += "\n";
+        }
+        QMessageBox::information(dlg, "Скопировано", "Матрица скопирована в буфер обмена в формате CSV.");
+    });
+
+    QPushButton *closeBtn = new QPushButton("Закрыть");
+    connect(closeBtn, &QPushButton::clicked, dlg, &QDialog::accept);
+
+    btnLayout->addWidget(copyBtn);
+    btnLayout->addStretch();
+    btnLayout->addWidget(closeBtn);
+    layout->addLayout(btnLayout);
+
+    dlg->exec();
+    delete dlg;
 }
