@@ -400,6 +400,7 @@ void MainWindow::setupUI()
     layoutCombo->addItem("Звезда (Star/Wheel)");      // 5
     layoutCombo->addItem("Барицентрическая (Tutte)");
     layoutCombo->addItem("Умное кольцо (Sorted)");
+    layoutCombo->addItem("Остовное дерево (MST)");    // 8  <-- НОВЫЙ
 
     useAnimationCheckbox = new QCheckBox("Плавная анимация");
     useAnimationCheckbox->setChecked(true);
@@ -433,6 +434,38 @@ void MainWindow::setupUI()
 
     layoutMath->addStretch();
     toolsPanel->addItem(pageMath, "4. Математика");
+
+
+    QWidget *pageTasks = new QWidget();
+    QVBoxLayout *layoutTasks = new QVBoxLayout(pageTasks);
+
+    QPushButton *task1Btn = new QPushButton("Задача 1: Маршрутизация (30 узлов)");
+    QPushButton *task2Btn = new QPushButton("Задача 2: ВОЛС 5×5 (25 узлов)");
+    QPushButton *task3Btn = new QPushButton("Задача 3: Связность (35 узлов)");
+    QPushButton *task4Btn = new QPushButton("Задача 4: Расписание (28 узлов)");
+
+    task1Btn->setStyleSheet("padding: 6px; background: #ddeeff;");
+    task2Btn->setStyleSheet("padding: 6px; background: #ddeeff;");
+    task3Btn->setStyleSheet("padding: 6px; background: #ddeeff;");
+    task4Btn->setStyleSheet("padding: 6px; background: #ddeeff;");
+
+    connect(task1Btn, &QPushButton::clicked,
+            this, &MainWindow::generateRoutingTask);
+    connect(task2Btn, &QPushButton::clicked,
+            this, &MainWindow::generateFiberOpticTask);
+    connect(task3Btn, &QPushButton::clicked,
+            this, &MainWindow::generateConnectivityTask);
+    connect(task4Btn, &QPushButton::clicked,
+            this, &MainWindow::generateExamSchedulingTask);
+
+    layoutTasks->addWidget(new QLabel("<b>Прикладные задачи:</b>"));
+    layoutTasks->addWidget(task1Btn);
+    layoutTasks->addWidget(task2Btn);
+    layoutTasks->addWidget(task3Btn);
+    layoutTasks->addWidget(task4Btn);
+    layoutTasks->addStretch();
+
+    toolsPanel->addItem(pageTasks, "5. Задачи");
 
 
     // СБОРКА ОКОН
@@ -839,12 +872,10 @@ void MainWindow::onRandomGraphClicked() {
 
 // Добавьте в начало файла, если нет
 #include <QtMath>
-
 void MainWindow::applyLayout()
 {
     if (nodes.isEmpty()) return;
 
-    // Выключаем физику
     if (physicsTimer->isActive()) {
         physicsTimer->stop();
         QList<QPushButton*> btns = this->findChildren<QPushButton*>();
@@ -853,208 +884,534 @@ void MainWindow::applyLayout()
 
     int type = layoutCombo->currentIndex();
     int n = nodes.size();
-    QParallelAnimationGroup *animGroup = new QParallelAnimationGroup;
     bool animate = useAnimationCheckbox->isChecked();
 
     QMap<int, QPointF> newPositions;
-
-    // Вспомогательные переменные
     const auto& matrix = graph->adjacencyMatrix();
-    int cx = 0, cy = 0;
 
-    // --- 0. CIRCULAR (По кругу) ---
+    // ── 0. CIRCULAR ──────────────────────────────────────────────
     if (type == 0) {
-        double radius = qMax(200.0, n * 40.0);
+        // Радиус зависит от числа вершин чтобы не слипались
+        double radius = qMax(150.0, n * 25.0);
         for (int i = 0; i < n; ++i) {
-            double angle = 2 * M_PI * i / n;
-            newPositions[i] = QPointF(radius * cos(angle), radius * sin(angle));
+            double angle = 2 * M_PI * i / n - M_PI / 2; // начинаем сверху
+            newPositions[i] = QPointF(radius * cos(angle),
+                                      radius * sin(angle));
         }
     }
-    // --- 1. GRID (Сетка) ---
-    else if (type == 1) {
-        int cols = ceil(sqrt(n));
-        int spacing = 150;
-        double offsetX = (cols - 1) * spacing / 2.0;
-        double offsetY = (ceil((double)n/cols) - 1) * spacing / 2.0;
-        for (int i = 0; i < n; ++i) {
-            newPositions[i] = QPointF((i % cols) * spacing - offsetX, (i / cols) * spacing - offsetY);
-        }
-    }
-    // --- 2. RANDOM (Случайная) ---
-    else if (type == 2) {
-        for (int i = 0; i < n; ++i) {
-            newPositions[i] = QPointF(QRandomGenerator::global()->bounded(-400, 401),
-                                      QRandomGenerator::global()->bounded(-400, 401));
-        }
-    }
-    // --- 3. HIERARCHICAL (Дерево) ---
-    else if (type == 3) {
-        // (Ваш старый код BFS по уровням, который я давал раньше. Если его нет, скопируйте из прошлого ответа или используйте заглушку)
-        // Для краткости здесь упрощенная версия:
-        QVector<int> levels(n, -1);
-        QQueue<int> q; q.enqueue(0); levels[0] = 0;
-        QVector<bool> vis(n, false); vis[0] = true;
 
-        while(!q.isEmpty()){
-            int u = q.dequeue();
-            for(int v=0; v<n; ++v) if(matrix[u][v] && !vis[v]) {
-                vis[v]=true; levels[v]=levels[u]+1; q.enqueue(v);
+    // ── 1. GRID ───────────────────────────────────────────────────
+    else if (type == 1) {
+        int cols = (int)ceil(sqrt((double)n));
+        int rows = (int)ceil((double)n / cols);
+        double spacing = qMax(80.0, 500.0 / cols);
+
+        // Центрируем всю сетку
+        double totalW = (cols - 1) * spacing;
+        double totalH = (rows - 1) * spacing;
+
+        for (int i = 0; i < n; ++i) {
+            int col = i % cols;
+            int row = i / cols;
+            newPositions[i] = QPointF(
+                col * spacing - totalW / 2.0,
+                row * spacing - totalH / 2.0
+            );
+        }
+    }
+
+    // ── 2. RANDOM ─────────────────────────────────────────────────
+    else if (type == 2) {
+        double spread = qMax(300.0, n * 20.0);
+        for (int i = 0; i < n; ++i) {
+            newPositions[i] = QPointF(
+                QRandomGenerator::global()->bounded(-(int)spread, (int)spread+1),
+                QRandomGenerator::global()->bounded(-(int)spread, (int)spread+1)
+            );
+        }
+    }
+
+    // ── 3. HIERARCHICAL (Дерево) ──────────────────────────────────
+    else if (type == 3) {
+
+        // Проверка: является ли граф деревом
+        bool isTree = graph->isConnected() &&
+                      (graph->edgeCount() == graph->nodeCount() - 1);
+
+        if (!isTree) {
+            // Показываем предупреждение с выбором
+            QMessageBox msgBox(this);
+            msgBox.setWindowTitle("Раскладка Дерево");
+            msgBox.setText(
+                "Граф не является деревом.\n"
+                "(Дерево: связный граф без циклов, рёбер = вершин - 1)\n\n"
+                "Что сделать?"
+            );
+            QPushButton *mstBtn = msgBox.addButton(
+                "Построить MST и применить", QMessageBox::ActionRole);
+            QPushButton *forceBtn = msgBox.addButton(
+                "Применить как есть (BFS)", QMessageBox::ActionRole);
+            QPushButton *cancelBtn = msgBox.addButton(
+                QMessageBox::Cancel);
+            msgBox.exec();
+
+            if (msgBox.clickedButton() == mstBtn) {
+                // Переключаемся на MST раскладку
+                layoutCombo->setCurrentIndex(8);
+                applyLayout();
+                return;
+            }
+            else if (msgBox.clickedButton() == cancelBtn) {
+                return;
+            }
+            // forceBtn — продолжаем как BFS
+        }
+
+        // BFS раскладка (работает и для деревьев и для обычных графов)
+        QVector<int> level(n, -1);
+        QVector<int> parent(n, -1);
+        QQueue<int> bfsQ;
+
+        // Корень = вершина с максимальной степенью
+        QVector<int> degrees = graph->calculateDegrees();
+        int root = 0;
+        for (int i = 1; i < n; ++i)
+            if (degrees[i] > degrees[root]) root = i;
+
+        level[root] = 0;
+        bfsQ.enqueue(root);
+
+        while (!bfsQ.isEmpty()) {
+            int u = bfsQ.dequeue();
+            for (int v = 0; v < n; ++v) {
+                if (matrix[u][v] > 0 && level[v] == -1) {
+                    level[v] = level[u] + 1;
+                    parent[v] = u;
+                    bfsQ.enqueue(v);
+                }
             }
         }
 
-        QMap<int, int> levelCounts;
-        for(int i=0; i<n; ++i) {
-            int lvl = (levels[i] == -1) ? 0 : levels[i]; // Изолированные на 0 уровень
-            int posInLevel = levelCounts[lvl]++;
-            newPositions[i] = QPointF(posInLevel * 100 - (lvl * 50), lvl * 120 - 200);
+        for (int i = 0; i < n; ++i)
+            if (level[i] == -1) level[i] = 0;
+
+        // Группируем по уровням
+        QMap<int, QVector<int>> levelGroups;
+        int maxLevel = 0;
+        for (int i = 0; i < n; ++i) {
+            levelGroups[level[i]].append(i);
+            maxLevel = qMax(maxLevel, level[i]);
+        }
+
+        // Барицентрическая сортировка внутри уровней
+        QMap<int, double> xPos;
+        xPos[root] = 0.0;
+
+        // Проход сверху вниз
+        for (int lvl = 1; lvl <= maxLevel; ++lvl) {
+            QVector<int>& group = levelGroups[lvl];
+            QVector<QPair<double,int>> bary;
+
+            for (int v : group) {
+                double sumX = 0; int cnt = 0;
+                for (int u : levelGroups[lvl-1]) {
+                    if (matrix[u][v] > 0 || matrix[v][u] > 0) {
+                        sumX += xPos.value(u, 0.0); cnt++;
+                    }
+                }
+                bary.append({cnt > 0 ? sumX/cnt : xPos.value(v, 0.0), v});
+            }
+
+            std::sort(bary.begin(), bary.end(),
+                [](const QPair<double,int>& a, const QPair<double,int>& b){
+                    return a.first < b.first;
+                });
+
+            int c = bary.size();
+            double sp = qMax(90.0, 700.0 / qMax(1, c));
+            double tw = (c - 1) * sp;
+            for (int i = 0; i < c; ++i) {
+                xPos[bary[i].second] = i * sp - tw / 2.0;
+                group[i] = bary[i].second;
+            }
+        }
+
+        // 3 итерации улучшения
+        for (int iter = 0; iter < 3; ++iter) {
+            // Вниз
+            for (int lvl = 1; lvl <= maxLevel; ++lvl) {
+                QVector<int>& group = levelGroups[lvl];
+                QVector<QPair<double,int>> bary;
+                for (int v : group) {
+                    double sumX = 0; int cnt = 0;
+                    for (int u : levelGroups[lvl-1]) {
+                        if (matrix[u][v] > 0 || matrix[v][u] > 0) {
+                            sumX += xPos.value(u, 0.0); cnt++;
+                        }
+                    }
+                    bary.append({cnt > 0 ? sumX/cnt : xPos.value(v,0.0), v});
+                }
+                std::sort(bary.begin(), bary.end(),
+                    [](const QPair<double,int>& a, const QPair<double,int>& b){
+                        return a.first < b.first;
+                    });
+                int c = bary.size();
+                double sp = qMax(90.0, 700.0 / qMax(1, c));
+                double tw = (c-1)*sp;
+                for (int i = 0; i < c; ++i) {
+                    xPos[bary[i].second] = i*sp - tw/2.0;
+                    group[i] = bary[i].second;
+                }
+            }
+            // Вверх
+            for (int lvl = maxLevel-1; lvl >= 0; --lvl) {
+                QVector<int>& group = levelGroups[lvl];
+                if (group.isEmpty()) continue;
+                QVector<QPair<double,int>> bary;
+                for (int v : group) {
+                    double sumX = 0; int cnt = 0;
+                    if (lvl+1 <= maxLevel) {
+                        for (int u : levelGroups[lvl+1]) {
+                            if (matrix[u][v] > 0 || matrix[v][u] > 0) {
+                                sumX += xPos.value(u, 0.0); cnt++;
+                            }
+                        }
+                    }
+                    bary.append({cnt > 0 ? sumX/cnt : xPos.value(v,0.0), v});
+                }
+                std::sort(bary.begin(), bary.end(),
+                    [](const QPair<double,int>& a, const QPair<double,int>& b){
+                        return a.first < b.first;
+                    });
+                int c = bary.size();
+                double sp = qMax(90.0, 700.0 / qMax(1, c));
+                double tw = (c-1)*sp;
+                for (int i = 0; i < c; ++i) {
+                    xPos[bary[i].second] = i*sp - tw/2.0;
+                    group[i] = bary[i].second;
+                }
+            }
+        }
+
+        // Финальные позиции
+        double levelSpacing = 130.0;
+        for (int lvl = 0; lvl <= maxLevel; ++lvl) {
+            for (int v : levelGroups[lvl]) {
+                newPositions[v] = QPointF(
+                    xPos.value(v, 0.0),
+                    lvl * levelSpacing - maxLevel * levelSpacing / 2.0
+                );
+            }
         }
     }
-    // --- 4. BIPARTITE (Двудольная) ---
+    // ── 4. BIPARTITE ──────────────────────────────────────────────
     else if (type == 4) {
         if (!graph->isBipartite()) {
-            QMessageBox::warning(this, "Ошибка", "Граф не является двудольным!");
-            // Фолбэк на круговую
-            layoutCombo->setCurrentIndex(0); applyLayout(); return;
+            QMessageBox::warning(this, "Ошибка",
+                "Граф не является двудольным!\nПрименяю круговую раскладку.");
+            layoutCombo->setCurrentIndex(0);
+            applyLayout();
+            return;
         }
 
         QVector<int> colors = graph->bipartiteColoring();
-        int leftCount = 0, rightCount = 0;
+        QVector<int> left, right;
 
         for (int i = 0; i < n; ++i) {
-            if (colors[i] == 0) {
-                newPositions[i] = QPointF(-200, leftCount * 80 - 200);
-                leftCount++;
-            } else {
-                newPositions[i] = QPointF(200, rightCount * 80 - 200);
-                rightCount++;
-            }
+            if (colors[i] == 0) left.append(i);
+            else right.append(i);
         }
-        // Центровка по вертикали
-        double leftOffset = (leftCount * 80) / 2.0;
-        double rightOffset = (rightCount * 80) / 2.0;
-        for (int i = 0; i < n; ++i) {
-            if (colors[i] == 0) newPositions[i] += QPointF(0, -leftOffset + 200 + 40);
-            else newPositions[i] += QPointF(0, -rightOffset + 200 + 40);
-        }
+
+        double spacingL = qMax(60.0, 500.0 / qMax(1, (int)left.size()));
+        double spacingR = qMax(60.0, 500.0 / qMax(1, (int)right.size()));
+
+        double totalHL = (left.size()  - 1) * spacingL;
+        double totalHR = (right.size() - 1) * spacingR;
+
+        for (int i = 0; i < left.size(); ++i)
+            newPositions[left[i]] = QPointF(-200,
+                i * spacingL - totalHL / 2.0);
+
+        for (int i = 0; i < right.size(); ++i)
+            newPositions[right[i]] = QPointF(200,
+                i * spacingR - totalHR / 2.0);
     }
-    // --- 5. STAR / WHEEL (Звезда) ---
+
+    // ── 5. STAR / WHEEL ───────────────────────────────────────────
     else if (type == 5) {
-        // Ищем вершину с макс степенью
         QVector<int> degrees = graph->calculateDegrees();
         int centerNode = 0;
-        int maxDeg = -1;
-        for(int i=0; i<n; ++i) if(degrees[i] > maxDeg) { maxDeg = degrees[i]; centerNode = i; }
+        for (int i = 1; i < n; ++i)
+            if (degrees[i] > degrees[centerNode]) centerNode = i;
 
         newPositions[centerNode] = QPointF(0, 0);
 
-        double radius = 250;
-        int current = 0;
+        double radius = qMax(200.0, (n-1) * 20.0);
         int outerCount = n - 1;
-        if (outerCount < 1) outerCount = 1;
+        int current = 0;
 
         for (int i = 0; i < n; ++i) {
             if (i == centerNode) continue;
-            double angle = 2 * M_PI * current / outerCount;
-            newPositions[i] = QPointF(radius * cos(angle), radius * sin(angle));
+            double angle = 2 * M_PI * current / outerCount - M_PI / 2;
+            newPositions[i] = QPointF(radius * cos(angle),
+                                      radius * sin(angle));
             current++;
         }
     }
-    // --- 6. TUTTE / BARYCENTRIC (Исправленная "Спектральная") ---
+
+    // ── 6. TUTTE / BARYCENTRIC ────────────────────────────────────
     else if (type == 6) {
-        // 1. Выбираем 3 "якоря" (Anchor Nodes), чтобы растянуть граф
-        // Берем вершины с равным шагом, чтобы они были распределены
-        int anchor1 = 0;
-        int anchor2 = n / 3;
-        int anchor3 = (2 * n) / 3;
-
-        // Если вершин мало, логика простая, но для n >= 3 это сработает
-        if (n < 3) { // Фолбэк для 2 вершин
-             newPositions[0] = QPointF(-100, 0);
-             if (n > 1) newPositions[1] = QPointF(100, 0);
+        if (n < 3) {
+            layoutCombo->setCurrentIndex(0);
+            applyLayout();
+            return;
         }
-        else {
-            // 2. Расставляем якоря треугольником
-            double radius = 250;
-            newPositions[anchor1] = QPointF(0, -radius);              // Верх
-            newPositions[anchor2] = QPointF(-radius * 0.866, radius * 0.5); // Лево-Низ
-            newPositions[anchor3] = QPointF(radius * 0.866, radius * 0.5);  // Право-Низ
 
-            // Инициализируем остальные в центре (чтобы не улетели при старте)
-            for (int i = 0; i < n; ++i) {
-                if (i != anchor1 && i != anchor2 && i != anchor3) {
-                    newPositions[i] = QPointF(0, 0);
-                }
+        // Выбираем якоря по структуре: вершины на "периметре"
+        // Ищем 3 вершины максимально удалённые друг от друга по степени
+        QVector<int> degrees = graph->calculateDegrees();
+
+        // Якорь 1: минимальная степень (лист / периферия)
+        int a1 = 0;
+        for (int i = 1; i < n; ++i)
+            if (degrees[i] < degrees[a1]) a1 = i;
+
+        // Якорь 2: максимально удалённый от a1 по BFS
+        auto bfsFrom = [&](int src) -> QVector<int> {
+            QVector<int> dist(n, -1);
+            QQueue<int> q;
+            dist[src] = 0; q.enqueue(src);
+            while (!q.isEmpty()) {
+                int u = q.dequeue();
+                for (int v = 0; v < n; ++v)
+                    if (matrix[u][v] > 0 && dist[v] == -1) {
+                        dist[v] = dist[u] + 1;
+                        q.enqueue(v);
+                    }
             }
+            return dist;
+        };
 
-            // 3. Итерации (Релаксация)
-            // Все узлы, кроме якорей, двигаются в среднюю точку своих соседей
-            for (int iter = 0; iter < 100; ++iter) {
-                for (int i = 0; i < n; ++i) {
-                    // Якоря не трогаем! Они держат "каркас"
-                    if (i == anchor1 || i == anchor2 || i == anchor3) continue;
+        QVector<int> d1 = bfsFrom(a1);
+        int a2 = a1;
+        for (int i = 0; i < n; ++i)
+            if (d1[i] > d1[a2]) a2 = i;
 
-                    double sumX = 0, sumY = 0;
-                    int count = 0;
+        // Якорь 3: максимально удалённый от a2
+        QVector<int> d2 = bfsFrom(a2);
+        int a3 = a1;
+        for (int i = 0; i < n; ++i)
+            if (i != a1 && i != a2 && d2[i] > d2[a3]) a3 = i;
 
-                    for (int j = 0; j < n; ++j) {
-                        // Если есть связь (ориентированная или нет - считаем как неориент)
-                        bool connected = (matrix[i][j] != 0);
-                        if (!connected && graph->getDirected()) connected = (matrix[j][i] != 0);
+        // Расставляем якоря треугольником
+        double R = 280.0;
+        newPositions[a1] = QPointF(0, -R);
+        newPositions[a2] = QPointF(-R * 0.866,  R * 0.5);
+        newPositions[a3] = QPointF( R * 0.866,  R * 0.5);
 
-                        if (connected) {
-                            sumX += newPositions[j].x();
-                            sumY += newPositions[j].y();
-                            count++;
-                        }
-                    }
+        // Остальные в центре
+        for (int i = 0; i < n; ++i)
+            if (i != a1 && i != a2 && i != a3)
+                newPositions[i] = QPointF(0, 0);
 
-                    if (count > 0) {
-                        newPositions[i] = QPointF(sumX / count, sumY / count);
+        // Релаксация
+        for (int iter = 0; iter < 200; ++iter) {
+            for (int i = 0; i < n; ++i) {
+                if (i == a1 || i == a2 || i == a3) continue;
+
+                double sumX = 0, sumY = 0;
+                int cnt = 0;
+
+                for (int j = 0; j < n; ++j) {
+                    bool connected = (matrix[i][j] != 0);
+                    if (!connected && graph->getDirected())
+                        connected = (matrix[j][i] != 0);
+
+                    if (connected) {
+                        sumX += newPositions[j].x();
+                        sumY += newPositions[j].y();
+                        cnt++;
                     }
                 }
+
+                if (cnt > 0)
+                    newPositions[i] = QPointF(sumX / cnt, sumY / cnt);
             }
         }
     }
-    // --- 7. SORTED CIRCLE (Умное кольцо) ---
-    else if (type == 7) {
-        // Сортируем вершины по степени
-        QVector<int> degrees = graph->calculateDegrees();
-        QVector<int> sortedIndices(n);
-        std::iota(sortedIndices.begin(), sortedIndices.end(), 0);
 
-        std::sort(sortedIndices.begin(), sortedIndices.end(), [&](int a, int b){
+    // ── 7. SORTED CIRCLE ──────────────────────────────────────────
+    else if (type == 7) {
+        QVector<int> degrees = graph->calculateDegrees();
+        QVector<int> idx(n);
+        std::iota(idx.begin(), idx.end(), 0);
+
+        // Сортируем по убыванию степени
+        std::sort(idx.begin(), idx.end(), [&](int a, int b){
             return degrees[a] > degrees[b];
         });
 
-        double radius = qMax(200.0, n * 40.0);
+        double radius = qMax(150.0, n * 25.0);
+
         for (int i = 0; i < n; ++i) {
-            int nodeId = sortedIndices[i];
-            double angle = 2 * M_PI * i / n;
-            newPositions[nodeId] = QPointF(radius * cos(angle), radius * sin(angle));
+            double angle = 2 * M_PI * i / n - M_PI / 2;
+            newPositions[idx[i]] = QPointF(radius * cos(angle),
+                                           radius * sin(angle));
         }
     }
 
-    // === ПРИМЕНЕНИЕ ===
+
+    // ── 8. MST LAYOUT (Остовное дерево) ──────────────────────────
+    else if (type == 8) {
+
+        // 1. Строим MST
+        QVector<QPair<int,int>> mst = graph->getPrimMST();
+
+        if (mst.isEmpty()) {
+            QMessageBox::warning(this, "MST Layout",
+                "Не удалось построить MST.\nГраф пуст или несвязный.");
+            return;
+        }
+
+        // 2. Строим матрицу смежности только для рёбер MST
+        QVector<QVector<int>> mstMatrix(n, QVector<int>(n, 0));
+        for (auto& e : mst) {
+            mstMatrix[e.first][e.second] = 1;
+            mstMatrix[e.second][e.first] = 1;
+        }
+
+        // 3. Корень MST = вершина с максимальной степенью в MST
+        QVector<int> mstDegree(n, 0);
+        for (auto& e : mst) {
+            mstDegree[e.first]++;
+            mstDegree[e.second]++;
+        }
+        int root = 0;
+        for (int i = 1; i < n; ++i)
+            if (mstDegree[i] > mstDegree[root]) root = i;
+
+        // 4. BFS по MST для уровней
+        QVector<int> level(n, -1);
+        QVector<int> par(n, -1);
+        QQueue<int> q;
+        level[root] = 0;
+        q.enqueue(root);
+
+        while (!q.isEmpty()) {
+            int u = q.dequeue();
+            for (int v = 0; v < n; ++v) {
+                if (mstMatrix[u][v] > 0 && level[v] == -1) {
+                    level[v] = level[u] + 1;
+                    par[v] = u;
+                    q.enqueue(v);
+                }
+            }
+        }
+
+        // 5. Группируем по уровням
+        QMap<int, QVector<int>> levelGroups;
+        int maxLevel = 0;
+        for (int i = 0; i < n; ++i) {
+            int lvl = (level[i] == -1) ? 0 : level[i];
+            levelGroups[lvl].append(i);
+            maxLevel = qMax(maxLevel, lvl);
+        }
+
+        // 6. Рекурсивно считаем ширину поддерева
+        // (чтобы не было наложений дочерних узлов)
+        std::function<int(int, int)> subtreeWidth = [&](int v, int p) -> int {
+            int width = 0;
+            for (int u = 0; u < n; ++u) {
+                if (mstMatrix[v][u] > 0 && u != p) {
+                    width += subtreeWidth(u, v);
+                }
+            }
+            return qMax(1, width);
+        };
+
+        // 7. Рекурсивно расставляем позиции
+        double hSpacing = 80.0;  // минимальный горизонтальный отступ
+        double vSpacing = 120.0; // вертикальный отступ между уровнями
+
+        std::function<void(int, int, double, double)> placeNode =
+            [&](int v, int p, double x, double width) {
+                newPositions[v] = QPointF(
+                    x,
+                    level[v] * vSpacing - maxLevel * vSpacing / 2.0
+                );
+
+                // Собираем детей
+                QVector<int> children;
+                for (int u = 0; u < n; ++u)
+                    if (mstMatrix[v][u] > 0 && u != p)
+                        children.append(u);
+
+                if (children.isEmpty()) return;
+
+                // Считаем ширины поддеревьев
+                QVector<int> widths;
+                int totalWidth = 0;
+                for (int child : children) {
+                    int w = subtreeWidth(child, v);
+                    widths.append(w);
+                    totalWidth += w;
+                }
+
+                // Расставляем детей равномерно
+                double startX = x - (totalWidth - 1) * hSpacing / 2.0;
+                double curX = startX;
+
+                for (int i = 0; i < children.size(); ++i) {
+                    double childWidth = widths[i] * hSpacing;
+                    placeNode(children[i], v,
+                              curX + childWidth / 2.0 - hSpacing / 2.0,
+                              childWidth);
+                    curX += childWidth;
+                }
+            };
+
+        // Запускаем от корня
+        double totalW = subtreeWidth(root, -1) * hSpacing;
+        placeNode(root, -1, 0, totalW);
+
+        // 8. Подсвечиваем рёбра MST
+        resetEdgeColors();
+        for (auto& e : mst) {
+            highlightEdge(e.first, e.second, QColor(255, 140, 0));
+        }
+
+        logAction(QString("MST Layout: построено остовное дерево (%1 рёбер)")
+                  .arg(mst.size()));
+    }
+    // ── ПРИМЕНЕНИЕ С АНИМАЦИЕЙ ────────────────────────────────────
+    QParallelAnimationGroup *animGroup = new QParallelAnimationGroup;
+
     for (int i = 0; i < n; ++i) {
         if (!nodes.contains(i)) continue;
-
         QPointF target = newPositions.value(i, QPointF(0,0));
 
         if (animate) {
             QPropertyAnimation *anim = new QPropertyAnimation(nodes[i], "pos");
-            anim->setDuration(1500);
+            anim->setDuration(800);
             anim->setStartValue(nodes[i]->pos());
             anim->setEndValue(target);
-            anim->setEasingCurve(QEasingCurve::OutExpo);
+            anim->setEasingCurve(QEasingCurve::OutCubic);
             animGroup->addAnimation(anim);
         } else {
             nodes[i]->setPos(target);
         }
     }
 
-    if (animate) animGroup->start(QAbstractAnimation::DeleteWhenStopped);
-    else { delete animGroup; view->centerOn(0, 0); }
+    if (animate) {
+        animGroup->start(QAbstractAnimation::DeleteWhenStopped);
+        connect(animGroup, &QParallelAnimationGroup::finished,
+                [=](){ view->centerOn(0,0); });
+    } else {
+        delete animGroup;
+        view->centerOn(0, 0);
+    }
 }
+
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Свойства и Матрица) ===
 
 void MainWindow::calculateGraphProperties() {
@@ -1928,4 +2285,253 @@ void MainWindow::showDistanceMatrixDialog()
 
     dlg->exec();
     delete dlg;
+}
+void MainWindow::generateRoutingTask()
+{
+    saveToHistory();
+    stopAndReset();
+
+    const int N = 30;
+    const int TARGET_EDGES = 60;
+    const int MIN_W = 1;
+    const int MAX_W = 20;
+
+    QVector<QVector<int>> matrix(N, QVector<int>(N, 0));
+
+    QVector<int> perm(N);
+    std::iota(perm.begin(), perm.end(), 0);
+    for (int i = N-1; i > 0; --i) {
+        int j = QRandomGenerator::global()->bounded(i+1);
+        std::swap(perm[i], perm[j]);
+    }
+
+    for (int i = 0; i < N-1; ++i) {
+        int u = perm[i], v = perm[i+1];
+        int w = QRandomGenerator::global()->bounded(MIN_W, MAX_W+1);
+        matrix[u][v] = w;
+        matrix[v][u] = w;
+    }
+
+    int edgeCount = N - 1;
+    int attempts = 0;
+    while (edgeCount < TARGET_EDGES && attempts < 10000) {
+        int u = QRandomGenerator::global()->bounded(N);
+        int v = QRandomGenerator::global()->bounded(N);
+        attempts++;
+        if (u == v || matrix[u][v] != 0) continue;
+        int w = QRandomGenerator::global()->bounded(MIN_W, MAX_W+1);
+        matrix[u][v] = w;
+        matrix[v][u] = w;
+        edgeCount++;
+    }
+
+    graph->setDirected(false);
+    if (directedCheck) directedCheck->setChecked(false);
+    graph->createFromAdjacencyMatrix(matrix);
+
+    updateGraphView();
+    updateTableFromGraph();
+
+    layoutCombo->setCurrentIndex(0);
+    applyLayout();
+
+    // Только одна строка
+    logAction("Сформирован граф для Задачи 1: Маршрутизация (30 вершин, 60 рёбер)");
+}
+
+void MainWindow::generateConnectivityTask()
+{
+    saveToHistory();
+    stopAndReset();
+
+    const int N = 35;
+    QVector<QVector<int>> matrix(N, QVector<int>(N, 0));
+
+    auto addEdge = [&](int u, int v) {
+        matrix[u][v] = 1;
+        matrix[v][u] = 1;
+    };
+
+    // GA (0-13)
+    addEdge(0,1); addEdge(1,2); addEdge(2,3);
+    addEdge(3,4); addEdge(4,0);
+    addEdge(4,5); addEdge(5,6); addEdge(6,7); addEdge(7,4);
+    addEdge(7,8); addEdge(8,9); addEdge(9,10); addEdge(10,7);
+    addEdge(10,11); addEdge(11,12); addEdge(12,13);
+    addEdge(13,10); addEdge(11,13);
+    addEdge(2,8); addEdge(5,11);
+
+    // GB (14-25)
+    for (int i = 14; i < 25; ++i) addEdge(i, i+1);
+    addEdge(25, 14);
+    addEdge(14,17); addEdge(17,20); addEdge(20,23);
+    addEdge(15,19); addEdge(16,22);
+
+    // GC (26-34) - дерево, все рёбра мосты
+    addEdge(26,27); addEdge(27,28); addEdge(28,29); addEdge(29,30);
+    addEdge(27,31);
+    addEdge(28,32); addEdge(32,33);
+    addEdge(30,34);
+
+    graph->setDirected(false);
+    if (directedCheck) directedCheck->setChecked(false);
+    graph->createFromAdjacencyMatrix(matrix);
+
+    updateGraphView();
+    updateTableFromGraph();
+
+    for (int i = 0;  i < 14; ++i) if(nodes.contains(i)) nodes[i]->setBaseColor(QColor(100,150,255));
+    for (int i = 14; i < 26; ++i) if(nodes.contains(i)) nodes[i]->setBaseColor(QColor(100,220,100));
+    for (int i = 26; i < 35; ++i) if(nodes.contains(i)) nodes[i]->setBaseColor(QColor(255,150,100));
+
+    layoutCombo->setCurrentIndex(0);
+    applyLayout();
+
+    // Только одна строка
+    logAction("Сформирован граф для Задачи 3: Анализ связности (35 вершин, 3 компоненты)");
+}
+
+void MainWindow::generateExamSchedulingTask()
+{
+    saveToHistory();
+    stopAndReset();
+
+    const int N = 28;
+    QVector<QVector<int>> matrix(N, QVector<int>(N, 0));
+
+    auto addEdge = [&](int u, int v) {
+        matrix[u][v] = 1;
+        matrix[v][u] = 1;
+    };
+
+    QVector<int> clique1 = {0,5,6,7,8,9,10};
+    for (int i = 0; i < clique1.size(); ++i)
+        for (int j = i+1; j < clique1.size(); ++j)
+            addEdge(clique1[i], clique1[j]);
+
+    QVector<int> clique2 = {1,0,11,12,13,14};
+    for (int i = 0; i < clique2.size(); ++i)
+        for (int j = i+1; j < clique2.size(); ++j)
+            addEdge(clique2[i], clique2[j]);
+
+    QVector<int> clique3 = {2,0,1,15,16};
+    for (int i = 0; i < clique3.size(); ++i)
+        for (int j = i+1; j < clique3.size(); ++j)
+            addEdge(clique3[i], clique3[j]);
+
+    QVector<int> clique4 = {3,2,1,17};
+    for (int i = 0; i < clique4.size(); ++i)
+        for (int j = i+1; j < clique4.size(); ++j)
+            addEdge(clique4[i], clique4[j]);
+
+    QVector<int> clique5 = {4,0,18,19};
+    for (int i = 0; i < clique5.size(); ++i)
+        for (int j = i+1; j < clique5.size(); ++j)
+            addEdge(clique5[i], clique5[j]);
+
+    addEdge(20,23); addEdge(20,24);
+    addEdge(21,24); addEdge(21,25);
+    addEdge(22,23); addEdge(22,26); addEdge(22,27);
+    addEdge(23,25);
+    addEdge(24,27);
+    addEdge(25,26);
+    addEdge(26,27);
+
+    graph->setDirected(false);
+    if (directedCheck) directedCheck->setChecked(false);
+    graph->createFromAdjacencyMatrix(matrix);
+
+    updateGraphView();
+    updateTableFromGraph();
+
+    layoutCombo->setCurrentIndex(0);
+    applyLayout();
+
+    // Только одна строка
+    logAction("Сформирован граф для Задачи 4: Расписание экзаменов (28 вершин)");
+}
+
+void MainWindow::generateFiberOpticTask()
+{
+    saveToHistory();
+    stopAndReset();
+
+    const int N = 25;
+
+    auto getId = [](int x, int y) -> int {
+        return x * 5 + y;
+    };
+
+    QVector<QVector<int>> matrix(N, QVector<int>(N, 0));
+
+    int edgeCount = 0;
+
+    for (int x = 0; x < 5; ++x) {
+        for (int y = 0; y < 5; ++y) {
+            int id = getId(x, y);
+
+            // Горизонтальное: (x,y)-(x+1,y), вес 10 = 1.0
+            if (x + 1 < 5) {
+                int nb = getId(x+1, y);
+                matrix[id][nb] = 10;
+                matrix[nb][id] = 10;
+                edgeCount++;
+            }
+
+            // Вертикальное: (x,y)-(x,y+1), вес 10 = 1.0
+            if (y + 1 < 5) {
+                int nb = getId(x, y+1);
+                matrix[id][nb] = 10;
+                matrix[nb][id] = 10;
+                edgeCount++;
+            }
+
+            // Диагональ вправо-вниз: (x,y)-(x+1,y+1), вес 14 = 1.4
+            if (x + 1 < 5 && y + 1 < 5) {
+                int nb = getId(x+1, y+1);
+                matrix[id][nb] = 14;
+                matrix[nb][id] = 14;
+                edgeCount++;
+            }
+
+            // Диагональ вправо-вверх: (x,y)-(x+1,y-1), вес 14 = 1.4
+            if (x + 1 < 5 && y - 1 >= 0) {
+                int nb = getId(x+1, y-1);
+                matrix[id][nb] = 14;
+                matrix[nb][id] = 14;
+                edgeCount++;
+            }
+        }
+    }
+
+    // Загружаем граф
+    graph->setDirected(false);
+    if (directedCheck) directedCheck->setChecked(false);
+    graph->createFromAdjacencyMatrix(matrix);
+
+    updateGraphView();
+    updateTableFromGraph();
+
+    // Расставляем вершины по сетке
+    const double SPACING = 100.0;
+    for (int x = 0; x < 5; ++x) {
+        for (int y = 0; y < 5; ++y) {
+            int id = getId(x, y);
+            if (nodes.contains(id)) {
+                nodes[id]->setPos(
+                    (x - 2) * SPACING,
+                    (y - 2) * SPACING
+                );
+            }
+        }
+    }
+
+    // Считаем MST
+    QVector<QPair<int,int>> mst = graph->getPrimMST();
+
+    // Лог
+    logAction("=== Задача 2: ВОЛС ===");
+    logAction(QString("Граф: 25 вершин, %1 рёбер").arg(edgeCount));
+
+    view->centerOn(0, 0);
 }
