@@ -74,6 +74,7 @@ private slots:
     void loadProject(); // Загрузить из JSON
     void visualizeMST();
     void calculateChromPolynomial();
+    void showDistanceMatrixDialog();
 
 private:
     void setupUI();
