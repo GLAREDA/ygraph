@@ -93,7 +93,6 @@ void Graph::createFromIncidenceMatrix(const QVector<QVector<int>>& matrix) {
         }
     }
 }
-
 const QVector<QVector<int>>& Graph::adjacencyMatrix() const { return adjMatrix; }
 const QVector<QVector<int>>& Graph::incidenceMatrix() const { return incMatrix; }
 
@@ -806,23 +805,20 @@ QVector<QPair<int, int>> Graph::getPrimMST() const {
     int n = adjMatrix.size();
     if (n == 0) return mstEdges;
 
-    // Массив для хранения минимального веса ребра до вершины
     QVector<int> key(n, INT_MAX);
-    // Массив родителей (откуда пришли)
     QVector<int> parent(n, -1);
-    // Массив посещенных
     QVector<bool> inMST(n, false);
 
-    // Начинаем с вершины 0
     key[0] = 0;
 
-    for (int count = 0; count < n - 1; ++count) {
-        // 1. Ищем вершину с минимальным key, которая еще не в MST
-        int min = INT_MAX, u = -1;
+    for (int count = 0; count < n; ++count) {
+        // 1. Выбираем вершину с минимальным key вне MST
+        int u = -1;
         for (int v = 0; v < n; ++v) {
-            if (!inMST[v] && key[v] < min) {
-                min = key[v];
-                u = v;
+            if (!inMST[v] && key[v] != INT_MAX) {
+                if (u == -1 || key[v] < key[u]) {
+                    u = v;
+                }
             }
         }
 
@@ -830,15 +826,14 @@ QVector<QPair<int, int>> Graph::getPrimMST() const {
 
         inMST[u] = true;
 
-        // Если это не корень, добавляем ребро в результат
+        // 2. Добавляем ребро (только не для стартовой вершины)
         if (parent[u] != -1) {
             mstEdges.append({parent[u], u});
         }
 
-        // 2. Обновляем соседей
+        // 3. Обновляем ключи соседей
         for (int v = 0; v < n; ++v) {
             int weight = adjMatrix[u][v];
-            // Если есть ребро, v не в MST, и вес меньше текущего известного
             if (weight > 0 && !inMST[v] && weight < key[v]) {
                 parent[v] = u;
                 key[v] = weight;
@@ -848,7 +843,6 @@ QVector<QPair<int, int>> Graph::getPrimMST() const {
 
     return mstEdges;
 }
-
 Polynomial Graph::getChromaticPolynomial() const {
     if (adjMatrix.size() > 12) {
         // Защита от зависания

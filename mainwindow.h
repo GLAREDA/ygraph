@@ -75,6 +75,10 @@ private slots:
     void visualizeMST();
     void calculateChromPolynomial();
     void showDistanceMatrixDialog();
+    void generateRoutingTask();
+    void generateFiberOpticTask();
+    void generateConnectivityTask();
+    void generateExamSchedulingTask();
 
 private:
     void setupUI();
