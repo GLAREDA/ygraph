@@ -79,6 +79,7 @@ private slots:
     void generateFiberOpticTask();
     void generateConnectivityTask();
     void generateExamSchedulingTask();
+    void resolveParallelEdges();
 
 private:
     void setupUI();
