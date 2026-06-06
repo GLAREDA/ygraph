@@ -872,6 +872,8 @@ void MainWindow::onRandomGraphClicked() {
 
 // Добавьте в начало файла, если нет
 #include <QtMath>
+// Добавьте в начало файла, если нет
+#include <QtMath>
 void MainWindow::applyLayout()
 {
     if (nodes.isEmpty()) return;
@@ -891,12 +893,10 @@ void MainWindow::applyLayout()
 
     // ── 0. CIRCULAR ──────────────────────────────────────────────
     if (type == 0) {
-        // Радиус зависит от числа вершин чтобы не слипались
         double radius = qMax(150.0, n * 25.0);
         for (int i = 0; i < n; ++i) {
-            double angle = 2 * M_PI * i / n - M_PI / 2; // начинаем сверху
-            newPositions[i] = QPointF(radius * cos(angle),
-                                      radius * sin(angle));
+            double angle = 2 * M_PI * i / n - M_PI / 2;
+            newPositions[i] = QPointF(radius * cos(angle), radius * sin(angle));
         }
     }
 
@@ -905,18 +905,13 @@ void MainWindow::applyLayout()
         int cols = (int)ceil(sqrt((double)n));
         int rows = (int)ceil((double)n / cols);
         double spacing = qMax(80.0, 500.0 / cols);
-
-        // Центрируем всю сетку
         double totalW = (cols - 1) * spacing;
         double totalH = (rows - 1) * spacing;
-
         for (int i = 0; i < n; ++i) {
             int col = i % cols;
             int row = i / cols;
-            newPositions[i] = QPointF(
-                col * spacing - totalW / 2.0,
-                row * spacing - totalH / 2.0
-            );
+            newPositions[i] = QPointF(col * spacing - totalW / 2.0,
+                                      row * spacing - totalH / 2.0);
         }
     }
 
@@ -926,76 +921,54 @@ void MainWindow::applyLayout()
         for (int i = 0; i < n; ++i) {
             newPositions[i] = QPointF(
                 QRandomGenerator::global()->bounded(-(int)spread, (int)spread+1),
-                QRandomGenerator::global()->bounded(-(int)spread, (int)spread+1)
-            );
+                QRandomGenerator::global()->bounded(-(int)spread, (int)spread+1));
         }
     }
 
-    // ── 3. HIERARCHICAL (Дерево) ──────────────────────────────────
+    // ── 3. HIERARCHICAL ──────────────────────────────────────────
     else if (type == 3) {
-
-        // Проверка: является ли граф деревом
         bool isTree = graph->isConnected() &&
                       (graph->edgeCount() == graph->nodeCount() - 1);
-
         if (!isTree) {
-            // Показываем предупреждение с выбором
             QMessageBox msgBox(this);
             msgBox.setWindowTitle("Раскладка Дерево");
-            msgBox.setText(
-                "Граф не является деревом.\n"
-                "(Дерево: связный граф без циклов, рёбер = вершин - 1)\n\n"
-                "Что сделать?"
-            );
-            QPushButton *mstBtn = msgBox.addButton(
-                "Построить MST и применить", QMessageBox::ActionRole);
-            QPushButton *forceBtn = msgBox.addButton(
-                "Применить как есть (BFS)", QMessageBox::ActionRole);
-            QPushButton *cancelBtn = msgBox.addButton(
-                QMessageBox::Cancel);
+            msgBox.setText("Граф не является деревом.\n"
+                           "(Дерево: связный граф без циклов, рёбер = вершин - 1)\n\n"
+                           "Что сделать?");
+            QPushButton *mstBtn   = msgBox.addButton("Построить MST и применить", QMessageBox::ActionRole);
+            QPushButton *forceBtn = msgBox.addButton("Применить как есть (BFS)",  QMessageBox::ActionRole);
+            QPushButton *cancelBtn = msgBox.addButton(QMessageBox::Cancel);
             msgBox.exec();
-
             if (msgBox.clickedButton() == mstBtn) {
-                // Переключаемся на MST раскладку
                 layoutCombo->setCurrentIndex(8);
                 applyLayout();
                 return;
-            }
-            else if (msgBox.clickedButton() == cancelBtn) {
+            } else if (msgBox.clickedButton() == cancelBtn) {
                 return;
             }
-            // forceBtn — продолжаем как BFS
+            (void)forceBtn;
         }
 
-        // BFS раскладка (работает и для деревьев и для обычных графов)
-        QVector<int> level(n, -1);
-        QVector<int> parent(n, -1);
+        QVector<int> level(n, -1), parent(n, -1);
         QQueue<int> bfsQ;
-
-        // Корень = вершина с максимальной степенью
         QVector<int> degrees = graph->calculateDegrees();
         int root = 0;
         for (int i = 1; i < n; ++i)
             if (degrees[i] > degrees[root]) root = i;
-
         level[root] = 0;
         bfsQ.enqueue(root);
-
         while (!bfsQ.isEmpty()) {
             int u = bfsQ.dequeue();
-            for (int v = 0; v < n; ++v) {
+            for (int v = 0; v < n; ++v)
                 if (matrix[u][v] > 0 && level[v] == -1) {
                     level[v] = level[u] + 1;
                     parent[v] = u;
                     bfsQ.enqueue(v);
                 }
-            }
         }
-
         for (int i = 0; i < n; ++i)
             if (level[i] == -1) level[i] = 0;
 
-        // Группируем по уровням
         QMap<int, QVector<int>> levelGroups;
         int maxLevel = 0;
         for (int i = 0; i < n; ++i) {
@@ -1003,138 +976,81 @@ void MainWindow::applyLayout()
             maxLevel = qMax(maxLevel, level[i]);
         }
 
-        // Барицентрическая сортировка внутри уровней
         QMap<int, double> xPos;
         xPos[root] = 0.0;
 
-        // Проход сверху вниз
         for (int lvl = 1; lvl <= maxLevel; ++lvl) {
             QVector<int>& group = levelGroups[lvl];
             QVector<QPair<double,int>> bary;
-
             for (int v : group) {
                 double sumX = 0; int cnt = 0;
-                for (int u : levelGroups[lvl-1]) {
-                    if (matrix[u][v] > 0 || matrix[v][u] > 0) {
-                        sumX += xPos.value(u, 0.0); cnt++;
-                    }
-                }
+                for (int u : levelGroups[lvl-1])
+                    if (matrix[u][v] > 0 || matrix[v][u] > 0) { sumX += xPos.value(u, 0.0); cnt++; }
                 bary.append({cnt > 0 ? sumX/cnt : xPos.value(v, 0.0), v});
             }
-
-            std::sort(bary.begin(), bary.end(),
-                [](const QPair<double,int>& a, const QPair<double,int>& b){
-                    return a.first < b.first;
-                });
-
+            std::sort(bary.begin(), bary.end(), [](const QPair<double,int>& a, const QPair<double,int>& b){ return a.first < b.first; });
             int c = bary.size();
             double sp = qMax(90.0, 700.0 / qMax(1, c));
             double tw = (c - 1) * sp;
-            for (int i = 0; i < c; ++i) {
-                xPos[bary[i].second] = i * sp - tw / 2.0;
-                group[i] = bary[i].second;
-            }
+            for (int i = 0; i < c; ++i) { xPos[bary[i].second] = i * sp - tw / 2.0; group[i] = bary[i].second; }
         }
 
-        // 3 итерации улучшения
         for (int iter = 0; iter < 3; ++iter) {
-            // Вниз
             for (int lvl = 1; lvl <= maxLevel; ++lvl) {
                 QVector<int>& group = levelGroups[lvl];
                 QVector<QPair<double,int>> bary;
                 for (int v : group) {
                     double sumX = 0; int cnt = 0;
-                    for (int u : levelGroups[lvl-1]) {
-                        if (matrix[u][v] > 0 || matrix[v][u] > 0) {
-                            sumX += xPos.value(u, 0.0); cnt++;
-                        }
-                    }
+                    for (int u : levelGroups[lvl-1])
+                        if (matrix[u][v] > 0 || matrix[v][u] > 0) { sumX += xPos.value(u, 0.0); cnt++; }
                     bary.append({cnt > 0 ? sumX/cnt : xPos.value(v,0.0), v});
                 }
-                std::sort(bary.begin(), bary.end(),
-                    [](const QPair<double,int>& a, const QPair<double,int>& b){
-                        return a.first < b.first;
-                    });
-                int c = bary.size();
-                double sp = qMax(90.0, 700.0 / qMax(1, c));
-                double tw = (c-1)*sp;
-                for (int i = 0; i < c; ++i) {
-                    xPos[bary[i].second] = i*sp - tw/2.0;
-                    group[i] = bary[i].second;
-                }
+                std::sort(bary.begin(), bary.end(), [](const QPair<double,int>& a, const QPair<double,int>& b){ return a.first < b.first; });
+                int c = bary.size(); double sp = qMax(90.0, 700.0 / qMax(1, c)); double tw = (c-1)*sp;
+                for (int i = 0; i < c; ++i) { xPos[bary[i].second] = i*sp - tw/2.0; group[i] = bary[i].second; }
             }
-            // Вверх
             for (int lvl = maxLevel-1; lvl >= 0; --lvl) {
                 QVector<int>& group = levelGroups[lvl];
                 if (group.isEmpty()) continue;
                 QVector<QPair<double,int>> bary;
                 for (int v : group) {
                     double sumX = 0; int cnt = 0;
-                    if (lvl+1 <= maxLevel) {
-                        for (int u : levelGroups[lvl+1]) {
-                            if (matrix[u][v] > 0 || matrix[v][u] > 0) {
-                                sumX += xPos.value(u, 0.0); cnt++;
-                            }
-                        }
-                    }
+                    if (lvl+1 <= maxLevel)
+                        for (int u : levelGroups[lvl+1])
+                            if (matrix[u][v] > 0 || matrix[v][u] > 0) { sumX += xPos.value(u, 0.0); cnt++; }
                     bary.append({cnt > 0 ? sumX/cnt : xPos.value(v,0.0), v});
                 }
-                std::sort(bary.begin(), bary.end(),
-                    [](const QPair<double,int>& a, const QPair<double,int>& b){
-                        return a.first < b.first;
-                    });
-                int c = bary.size();
-                double sp = qMax(90.0, 700.0 / qMax(1, c));
-                double tw = (c-1)*sp;
-                for (int i = 0; i < c; ++i) {
-                    xPos[bary[i].second] = i*sp - tw/2.0;
-                    group[i] = bary[i].second;
-                }
+                std::sort(bary.begin(), bary.end(), [](const QPair<double,int>& a, const QPair<double,int>& b){ return a.first < b.first; });
+                int c = bary.size(); double sp = qMax(90.0, 700.0 / qMax(1, c)); double tw = (c-1)*sp;
+                for (int i = 0; i < c; ++i) { xPos[bary[i].second] = i*sp - tw/2.0; group[i] = bary[i].second; }
             }
         }
 
-        // Финальные позиции
         double levelSpacing = 130.0;
-        for (int lvl = 0; lvl <= maxLevel; ++lvl) {
-            for (int v : levelGroups[lvl]) {
-                newPositions[v] = QPointF(
-                    xPos.value(v, 0.0),
-                    lvl * levelSpacing - maxLevel * levelSpacing / 2.0
-                );
-            }
-        }
+        for (int lvl = 0; lvl <= maxLevel; ++lvl)
+            for (int v : levelGroups[lvl])
+                newPositions[v] = QPointF(xPos.value(v, 0.0),
+                                          lvl * levelSpacing - maxLevel * levelSpacing / 2.0);
     }
+
     // ── 4. BIPARTITE ──────────────────────────────────────────────
     else if (type == 4) {
         if (!graph->isBipartite()) {
-            QMessageBox::warning(this, "Ошибка",
-                "Граф не является двудольным!\nПрименяю круговую раскладку.");
+            QMessageBox::warning(this, "Ошибка", "Граф не является двудольным!\nПрименяю круговую раскладку.");
             layoutCombo->setCurrentIndex(0);
             applyLayout();
             return;
         }
-
         QVector<int> colors = graph->bipartiteColoring();
         QVector<int> left, right;
-
-        for (int i = 0; i < n; ++i) {
-            if (colors[i] == 0) left.append(i);
-            else right.append(i);
-        }
-
+        for (int i = 0; i < n; ++i)
+            (colors[i] == 0 ? left : right).append(i);
         double spacingL = qMax(60.0, 500.0 / qMax(1, (int)left.size()));
         double spacingR = qMax(60.0, 500.0 / qMax(1, (int)right.size()));
-
         double totalHL = (left.size()  - 1) * spacingL;
         double totalHR = (right.size() - 1) * spacingR;
-
-        for (int i = 0; i < left.size(); ++i)
-            newPositions[left[i]] = QPointF(-200,
-                i * spacingL - totalHL / 2.0);
-
-        for (int i = 0; i < right.size(); ++i)
-            newPositions[right[i]] = QPointF(200,
-                i * spacingR - totalHR / 2.0);
+        for (int i = 0; i < left.size();  ++i) newPositions[left[i]]  = QPointF(-200, i * spacingL - totalHL / 2.0);
+        for (int i = 0; i < right.size(); ++i) newPositions[right[i]] = QPointF( 200, i * spacingR - totalHR / 2.0);
     }
 
     // ── 5. STAR / WHEEL ───────────────────────────────────────────
@@ -1143,99 +1059,47 @@ void MainWindow::applyLayout()
         int centerNode = 0;
         for (int i = 1; i < n; ++i)
             if (degrees[i] > degrees[centerNode]) centerNode = i;
-
         newPositions[centerNode] = QPointF(0, 0);
-
         double radius = qMax(200.0, (n-1) * 20.0);
-        int outerCount = n - 1;
-        int current = 0;
-
+        int outerCount = n - 1, current = 0;
         for (int i = 0; i < n; ++i) {
             if (i == centerNode) continue;
             double angle = 2 * M_PI * current / outerCount - M_PI / 2;
-            newPositions[i] = QPointF(radius * cos(angle),
-                                      radius * sin(angle));
+            newPositions[i] = QPointF(radius * cos(angle), radius * sin(angle));
             current++;
         }
     }
 
     // ── 6. TUTTE / BARYCENTRIC ────────────────────────────────────
     else if (type == 6) {
-        if (n < 3) {
-            layoutCombo->setCurrentIndex(0);
-            applyLayout();
-            return;
-        }
-
-        // Выбираем якоря по структуре: вершины на "периметре"
-        // Ищем 3 вершины максимально удалённые друг от друга по степени
+        if (n < 3) { layoutCombo->setCurrentIndex(0); applyLayout(); return; }
         QVector<int> degrees = graph->calculateDegrees();
-
-        // Якорь 1: минимальная степень (лист / периферия)
         int a1 = 0;
-        for (int i = 1; i < n; ++i)
-            if (degrees[i] < degrees[a1]) a1 = i;
-
-        // Якорь 2: максимально удалённый от a1 по BFS
+        for (int i = 1; i < n; ++i) if (degrees[i] < degrees[a1]) a1 = i;
         auto bfsFrom = [&](int src) -> QVector<int> {
-            QVector<int> dist(n, -1);
-            QQueue<int> q;
-            dist[src] = 0; q.enqueue(src);
-            while (!q.isEmpty()) {
-                int u = q.dequeue();
-                for (int v = 0; v < n; ++v)
-                    if (matrix[u][v] > 0 && dist[v] == -1) {
-                        dist[v] = dist[u] + 1;
-                        q.enqueue(v);
-                    }
-            }
+            QVector<int> dist(n, -1); QQueue<int> q; dist[src] = 0; q.enqueue(src);
+            while (!q.isEmpty()) { int u = q.dequeue(); for (int v = 0; v < n; ++v) if (matrix[u][v] > 0 && dist[v] == -1) { dist[v] = dist[u]+1; q.enqueue(v); } }
             return dist;
         };
-
-        QVector<int> d1 = bfsFrom(a1);
-        int a2 = a1;
-        for (int i = 0; i < n; ++i)
-            if (d1[i] > d1[a2]) a2 = i;
-
-        // Якорь 3: максимально удалённый от a2
-        QVector<int> d2 = bfsFrom(a2);
-        int a3 = a1;
-        for (int i = 0; i < n; ++i)
-            if (i != a1 && i != a2 && d2[i] > d2[a3]) a3 = i;
-
-        // Расставляем якоря треугольником
+        QVector<int> d1 = bfsFrom(a1); int a2 = a1;
+        for (int i = 0; i < n; ++i) if (d1[i] > d1[a2]) a2 = i;
+        QVector<int> d2 = bfsFrom(a2); int a3 = a1;
+        for (int i = 0; i < n; ++i) if (i != a1 && i != a2 && d2[i] > d2[a3]) a3 = i;
         double R = 280.0;
         newPositions[a1] = QPointF(0, -R);
         newPositions[a2] = QPointF(-R * 0.866,  R * 0.5);
         newPositions[a3] = QPointF( R * 0.866,  R * 0.5);
-
-        // Остальные в центре
-        for (int i = 0; i < n; ++i)
-            if (i != a1 && i != a2 && i != a3)
-                newPositions[i] = QPointF(0, 0);
-
-        // Релаксация
+        for (int i = 0; i < n; ++i) if (i != a1 && i != a2 && i != a3) newPositions[i] = QPointF(0, 0);
         for (int iter = 0; iter < 200; ++iter) {
             for (int i = 0; i < n; ++i) {
                 if (i == a1 || i == a2 || i == a3) continue;
-
-                double sumX = 0, sumY = 0;
-                int cnt = 0;
-
+                double sumX = 0, sumY = 0; int cnt = 0;
                 for (int j = 0; j < n; ++j) {
                     bool connected = (matrix[i][j] != 0);
-                    if (!connected && graph->getDirected())
-                        connected = (matrix[j][i] != 0);
-
-                    if (connected) {
-                        sumX += newPositions[j].x();
-                        sumY += newPositions[j].y();
-                        cnt++;
-                    }
+                    if (!connected && graph->getDirected()) connected = (matrix[j][i] != 0);
+                    if (connected) { sumX += newPositions[j].x(); sumY += newPositions[j].y(); cnt++; }
                 }
-
-                if (cnt > 0)
-                    newPositions[i] = QPointF(sumX / cnt, sumY / cnt);
+                if (cnt > 0) newPositions[i] = QPointF(sumX / cnt, sumY / cnt);
             }
         }
     }
@@ -1245,114 +1109,122 @@ void MainWindow::applyLayout()
         QVector<int> degrees = graph->calculateDegrees();
         QVector<int> idx(n);
         std::iota(idx.begin(), idx.end(), 0);
-
-        // Сортируем по убыванию степени
-        std::sort(idx.begin(), idx.end(), [&](int a, int b){
-            return degrees[a] > degrees[b];
-        });
-
+        std::sort(idx.begin(), idx.end(), [&](int a, int b){ return degrees[a] > degrees[b]; });
         double radius = qMax(150.0, n * 25.0);
-
         for (int i = 0; i < n; ++i) {
             double angle = 2 * M_PI * i / n - M_PI / 2;
-            newPositions[idx[i]] = QPointF(radius * cos(angle),
-                                           radius * sin(angle));
+            newPositions[idx[i]] = QPointF(radius * cos(angle), radius * sin(angle));
         }
     }
 
+    // ── 8. MST LAYOUT ────────────────────────────────────────────
+    else if (type == 8) {
 
-    // ── 8. MST LAYOUT (Остовное дерево) ──────────────────────────
-   else if (type == 8) {
+        QVector<QPair<int,int>> mst = graph->getPrimMST();
+        if (mst.isEmpty()) {
+            QMessageBox::warning(this, "MST Layout",
+                "Не удалось построить MST.\nГраф пуст или несвязный.");
+            return;
+        }
 
-    // 1. Строим MST
-    QVector<QPair<int,int>> mst = graph->getPrimMST();
-    if (mst.isEmpty()) {
-        QMessageBox::warning(this, "MST Layout",
-            "Не удалось построить MST.\nГраф пуст или несвязный.");
-        return;
-    }
+        // Матрица смежности MST
+        QVector<QVector<int>> mstAdj(n, QVector<int>(n, 0));
+        for (auto& e : mst) {
+            mstAdj[e.first][e.second] = 1;
+            mstAdj[e.second][e.first] = 1;
+        }
 
-    // 2. Матрица смежности MST
-    QVector<QVector<int>> mstAdj(n, QVector<int>(n, 0));
-    for (auto& e : mst) {
-        mstAdj[e.first][e.second] = 1;
-        mstAdj[e.second][e.first] = 1;
-    }
+        // Корень = вершина с макс. степенью в MST
+        QVector<int> mstDeg(n, 0);
+        for (auto& e : mst) { mstDeg[e.first]++; mstDeg[e.second]++; }
+        int root = (int)(std::max_element(mstDeg.begin(), mstDeg.end()) - mstDeg.begin());
 
-    // 3. Корень = вершина с макс. степенью в MST
-    QVector<int> mstDeg(n, 0);
-    for (auto& e : mst) { mstDeg[e.first]++; mstDeg[e.second]++; }
-    int root = std::max_element(mstDeg.begin(), mstDeg.end()) - mstDeg.begin();
+        // BFS — уровни
+        QVector<int> level(n, -1), par(n, -1);
+        QQueue<int> bfsQ2;
+        level[root] = 0;
+        bfsQ2.enqueue(root);
+        while (!bfsQ2.isEmpty()) {
+            int u = bfsQ2.dequeue();
+            for (int v = 0; v < n; ++v)
+                if (mstAdj[u][v] && level[v] == -1) {
+                    level[v] = level[u] + 1;
+                    par[v] = u;
+                    bfsQ2.enqueue(v);
+                }
+        }
+        for (int i = 0; i < n; ++i)
+            if (level[i] == -1) level[i] = 0;
 
-    // 4. BFS — уровни и родители
-    QVector<int> level(n, -1), par(n, -1);
-    QQueue<int> q;
-    level[root] = 0;
-    q.enqueue(root);
-    while (!q.isEmpty()) {
-        int u = q.dequeue();
-        for (int v = 0; v < n; ++v)
-            if (mstAdj[u][v] && level[v] == -1) {
-                level[v] = level[u] + 1;
-                par[v] = u;
-                q.enqueue(v);
+        // DFS пост-порядок: листья получают уникальные слоты,
+        // родители — среднее своих детей. Наложения невозможны.
+        const double NODE_SIZE = 40.0;
+        const double H_GAP    = 20.0;
+        const double SLOT     = NODE_SIZE + H_GAP;
+        const double V_STEP   = 120.0;
+
+        QVector<double> xPos(n, 0.0);
+        double leafCounter = 0.0;
+
+        std::function<void(int,int)> assignX = [&](int v, int p) {
+            QVector<int> children;
+            for (int u = 0; u < n; ++u)
+                if (mstAdj[v][u] && u != p)
+                    children.append(u);
+            if (children.isEmpty()) {
+                xPos[v] = leafCounter * SLOT;
+                leafCounter += 1.0;
+            } else {
+                for (int c : children) assignX(c, v);
+                xPos[v] = (xPos[children.first()] + xPos[children.last()]) / 2.0;
             }
+        };
+        assignX(root, -1);
+
+        // Центрируем
+        double minX = *std::min_element(xPos.begin(), xPos.end());
+        double maxX = *std::max_element(xPos.begin(), xPos.end());
+        double offsetX = (minX + maxX) / 2.0;
+
+        int maxLevel = *std::max_element(level.begin(), level.end());
+        for (int i = 0; i < n; ++i)
+            newPositions[i] = QPointF(xPos[i] - offsetX,
+                                      level[i] * V_STEP - maxLevel * V_STEP / 2.0);
+
+        // Подсвечиваем рёбра MST
+        resetEdgeColors();
+        for (auto& e : mst)
+            highlightEdge(e.first, e.second, QColor(255, 140, 0));
+
+        logAction(QString("MST Layout: построено остовное дерево (%1 рёбер)").arg(mst.size()));
     }
-    for (int i = 0; i < n; ++i)
-        if (level[i] == -1) level[i] = 0;
 
-    // 5. Порядок обхода: DFS в порядке BFS-уровней (пост-порядок)
-    //    Считаем x-позицию каждого листа по порядку обхода,
-    //    затем родители получают среднее детей — без наложений гарантированно.
+    // ── ПРИМЕНЕНИЕ С АНИМАЦИЕЙ ────────────────────────────────────
+    QParallelAnimationGroup *animGroup = new QParallelAnimationGroup;
 
-    const double NODE_SIZE = 40.0;   // диаметр вершины
-    const double H_GAP    = 20.0;    // минимальный зазор между вершинами
-    const double SLOT     = NODE_SIZE + H_GAP; // шаг на лист
-    const double V_STEP   = 120.0;
-
-    // DFS пост-порядок: сначала листья получают x, потом родители
-    QVector<double> xPos(n, 0.0);
-    double leafCounter = 0.0;
-
-    std::function<void(int, int)> assignX = [&](int v, int p) {
-        QVector<int> children;
-        for (int u = 0; u < n; ++u)
-            if (mstAdj[v][u] && u != p)
-                children.append(u);
-
-        if (children.isEmpty()) {
-            // Лист: берём следующую свободную позицию
-            xPos[v] = leafCounter * SLOT;
-            leafCounter += 1.0;
+    for (int i = 0; i < n; ++i) {
+        if (!nodes.contains(i)) continue;
+        QPointF target = newPositions.value(i, QPointF(0,0));
+        if (animate) {
+            QPropertyAnimation *anim = new QPropertyAnimation(nodes[i], "pos");
+            anim->setDuration(800);
+            anim->setStartValue(nodes[i]->pos());
+            anim->setEndValue(target);
+            anim->setEasingCurve(QEasingCurve::OutCubic);
+            animGroup->addAnimation(anim);
         } else {
-            for (int c : children)
-                assignX(c, v);
-            // Родитель: центр над детьми
-            xPos[v] = (xPos[children.first()] + xPos[children.last()]) / 2.0;
+            nodes[i]->setPos(target);
         }
-    };
-    assignX(root, -1);
+    }
 
-    // 6. Центрируем по x
-    double minX = *std::min_element(xPos.begin(), xPos.end());
-    double maxX = *std::max_element(xPos.begin(), xPos.end());
-    double offsetX = (minX + maxX) / 2.0;
-
-    int maxLevel = *std::max_element(level.begin(), level.end());
-    for (int i = 0; i < n; ++i)
-        newPositions[i] = QPointF(
-            xPos[i] - offsetX,
-            level[i] * V_STEP - maxLevel * V_STEP / 2.0
-        );
-
-    // 7. Подсвечиваем рёбра MST
-    resetEdgeColors();
-    for (auto& e : mst)
-        highlightEdge(e.first, e.second, QColor(255, 140, 0));
-
-    logAction(QString("MST Layout: построено остовное дерево (%1 рёбер)")
-              .arg(mst.size()));
-}
+    if (animate) {
+        animGroup->start(QAbstractAnimation::DeleteWhenStopped);
+        connect(animGroup, &QParallelAnimationGroup::finished,
+                [=](){ view->centerOn(0,0); });
+    } else {
+        delete animGroup;
+        view->centerOn(0, 0);
+    }
 }
 
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Свойства и Матрица) ===
