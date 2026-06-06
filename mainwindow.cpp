@@ -2455,68 +2455,108 @@ void MainWindow::generateFiberOpticTask()
 {
     saveToHistory();
     stopAndReset();
-
+ 
     const int N = 25;
-
-    auto getId = [](int x, int y) -> int {
-        return x * 5 + y;
-    };
-
+ 
     QVector<QVector<int>> matrix(N, QVector<int>(N, 0));
-
-    int edgeCount = 0;
-
-    for (int x = 0; x < 5; ++x) {
-        for (int y = 0; y < 5; ++y) {
-            int id = getId(x, y);
-
-            // Горизонтальное: (x,y)-(x+1,y), вес 10 = 1.0
-            if (x + 1 < 5) {
-                int nb = getId(x+1, y);
-                matrix[id][nb] = 10;
-                matrix[nb][id] = 10;
-                edgeCount++;
-            }
-
-            // Вертикальное: (x,y)-(x,y+1), вес 10 = 1.0
-            if (y + 1 < 5) {
-                int nb = getId(x, y+1);
-                matrix[id][nb] = 10;
-                matrix[nb][id] = 10;
-                edgeCount++;
-            }
-
-            // Диагональ вправо-вниз: (x,y)-(x+1,y+1), вес 14 = 1.4
-            if (x + 1 < 5 && y + 1 < 5) {
-                int nb = getId(x+1, y+1);
-                matrix[id][nb] = 14;
-                matrix[nb][id] = 14;
-                edgeCount++;
-            }
-
-            // Диагональ вправо-вверх: (x,y)-(x+1,y-1), вес 14 = 1.4
-            if (x + 1 < 5 && y - 1 >= 0) {
-                int nb = getId(x+1, y-1);
-                matrix[id][nb] = 14;
-                matrix[nb][id] = 14;
-                edgeCount++;
-            }
-        }
-    }
-
-    // Загружаем граф
+ 
+    auto setEdge = [&](int u, int v, int w) {
+        matrix[u][v] = w;
+        matrix[v][u] = w;
+    };
+ 
+    // ── Горизонтальные рёбра (соседние столбцы, одна строка) ────────────────
+    setEdge(0,  5,  12); // 1–2
+    setEdge(5,  10, 17); // 2–3
+    setEdge(10, 15,  8); // 3–4
+    setEdge(15, 20, 15); // 4–5
+    setEdge(1,  6,   8); // 6–7
+    setEdge(6,  11, 15); // 7–8
+    setEdge(11, 16,  8); // 8–9
+    setEdge(16, 21, 16); // 9–10
+    setEdge(2,  7,  10); // 11–12
+    setEdge(7,  12,  9); // 12–13
+    setEdge(12, 17, 15); // 13–14
+    setEdge(17, 22, 15); // 14–15
+    setEdge(3,  8,  17); // 16–17
+    setEdge(8,  13,  8); // 17–18
+    setEdge(13, 18, 16); // 18–19
+    setEdge(18, 23, 14); // 19–20
+    setEdge(4,  9,  16); // 21–22
+    setEdge(9,  14, 14); // 22–23
+    setEdge(14, 19, 12); // 23–24
+    setEdge(19, 24, 11); // 24–25
+ 
+    // ── Вертикальные рёбра (одни столбец, соседние строки) ──────────────────
+    setEdge(0,  1,   9); // 1–6
+    setEdge(5,  6,   8); // 2–7
+    setEdge(10, 11, 16); // 3–8
+    setEdge(15, 16,  7); // 4–9
+    setEdge(20, 21, 13); // 5–10
+    setEdge(1,  2,  10); // 6–11
+    setEdge(6,  7,   7); // 7–12
+    setEdge(11, 12, 17); // 8–13
+    setEdge(16, 17, 16); // 9–14
+    setEdge(21, 22,  7); // 10–15
+    setEdge(2,  3,   7); // 11–16
+    setEdge(7,  8,  13); // 12–17
+    setEdge(12, 13, 16); // 13–18
+    setEdge(17, 18,  9); // 14–19
+    setEdge(22, 23, 16); // 15–20
+    setEdge(3,  4,  10); // 16–21
+    setEdge(8,  9,  18); // 17–22
+    setEdge(13, 14, 16); // 18–23
+    setEdge(18, 19, 15); // 19–24
+    setEdge(23, 24, 14); // 20–25
+ 
+    // ── Диагонали ↘ (столбец+1, строка+1) ───────────────────────────────────
+    setEdge(0,  6,  13); // 1–7
+    setEdge(5,  11, 15); // 2–8
+    setEdge(10, 16,  7); // 3–9
+    setEdge(15, 21,  8); // 4–10
+    setEdge(1,  7,   8); // 6–12
+    setEdge(6,  12, 16); // 7–13
+    setEdge(11, 17, 17); // 8–14
+    setEdge(16, 22, 16); // 9–15
+    setEdge(2,  8,  15); // 11–17
+    setEdge(7,  13,  9); // 12–18
+    setEdge(12, 18, 11); // 13–19
+    setEdge(17, 23,  8); // 14–20
+    setEdge(3,  9,  12); // 16–22
+    setEdge(8,  14,  8); // 17–23
+    setEdge(13, 19, 10); // 18–24
+    setEdge(18, 24, 13); // 19–25
+ 
+    // ── Диагонали ↗ (столбец+1, строка-1) ───────────────────────────────────
+    setEdge(1,  5,   7); // 6–2
+    setEdge(6,  10, 12); // 7–3
+    setEdge(11, 15, 10); // 8–4
+    setEdge(16, 20, 13); // 9–5
+    setEdge(2,  6,  13); // 11–7
+    setEdge(7,  11, 10); // 12–8
+    setEdge(12, 16,  7); // 13–9
+    setEdge(17, 21, 13); // 14–10
+    setEdge(3,  7,  11); // 16–12
+    setEdge(8,  12,  8); // 17–13
+    setEdge(13, 17, 17); // 18–14
+    setEdge(18, 22, 16); // 19–15
+    setEdge(4,  8,  15); // 21–17
+    setEdge(9,  13,  7); // 22–18
+    setEdge(14, 18, 17); // 23–19
+    setEdge(19, 23, 12); // 24–20
+ 
+    // ── Загрузка графа ───────────────────────────────────────────────────────
     graph->setDirected(false);
     if (directedCheck) directedCheck->setChecked(false);
     graph->createFromAdjacencyMatrix(matrix);
-
     updateGraphView();
     updateTableFromGraph();
-
-    // Расставляем вершины по сетке
+ 
+    // ── Расстановка вершин по сетке ─────────────────────────────────────────
     const double SPACING = 100.0;
     for (int x = 0; x < 5; ++x) {
         for (int y = 0; y < 5; ++y) {
-            int id = getId(x, y);
+            int id = x * 5 + y;
             if (nodes.contains(id)) {
                 nodes[id]->setPos(
                     (x - 2) * SPACING,
@@ -2525,13 +2565,15 @@ void MainWindow::generateFiberOpticTask()
             }
         }
     }
-
-    // Считаем MST
+ 
+    // ── MST и лог ───────────────────────────────────────────────────────────
     QVector<QPair<int,int>> mst = graph->getPrimMST();
-
-    // Лог
+    int mstWeight = 0;
+    for (auto& e : mst)
+        mstWeight += matrix[e.first][e.second];
+ 
     logAction("=== Задача 2: ВОЛС ===");
-    logAction(QString("Граф: 25 вершин, %1 рёбер").arg(edgeCount));
-
+    logAction(QString("Граф: 25 вершин, 72 ребра (веса 7–18)"));
+    logAction(QString("MST: %1 рёбер, суммарный вес = %2").arg(mst.size()).arg(mstWeight));
     view->centerOn(0, 0);
 }
