@@ -1228,6 +1228,90 @@ void MainWindow::applyLayout()
         resolveParallelEdges();
     }
 }
+    // ── 9. АВТО-РАЗРЕШЕНИЕ НАЛОЖЕНИЙ (ANTI-OVERLAP) ───────────────────
+    // Этот алгоритм математически раздвигает граф, чтобы рёбра не проходили
+    // сквозь чужие вершины, а сами вершины не слипались.
+    const int RESOLVE_ITERS = 20;        // Количество попыток расталкивания
+    const double MIN_NODE_DIST = 60.0;   // Минимальное расстояние между вершинами
+    const double EDGE_CLEARANCE = 25.0;  // Минимальное расстояние от вершины до чужого ребра
+
+    for (int iter = 0; iter < RESOLVE_ITERS; ++iter) {
+        bool moved = false;
+
+        // ШАГ 1: Расталкиваем узлы, если они оказались слишком близко друг к другу
+        QList<int> keys = newPositions.keys();
+        for (int i = 0; i < keys.size(); ++i) {
+            for (int j = i + 1; j < keys.size(); ++j) {
+                int u = keys[i];
+                int v = keys[j];
+                QPointF d = newPositions[v] - newPositions[u];
+                double dist = sqrt(d.x()*d.x() + d.y()*d.y());
+                
+                if (dist < MIN_NODE_DIST) {
+                    if (dist < 0.001) d = QPointF(10, 10); // Защита от деления на 0
+                    double push = (MIN_NODE_DIST - dist) / 2.0;
+                    QPointF dir = d / sqrt(d.x()*d.x() + d.y()*d.y());
+                    newPositions[u] -= dir * push;
+                    newPositions[v] += dir * push;
+                    moved = true;
+                }
+            }
+        }
+
+        // ШАГ 2: Выталкиваем узлы, которые оказались прямо на чужих рёбрах
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                if (i == j) continue;
+                
+                // Проверяем, есть ли ребро между i и j
+                bool hasEdge = (matrix[i][j] > 0);
+                if (!hasEdge && !graph->getDirected()) hasEdge = (matrix[j][i] > 0);
+
+                if (hasEdge) {
+                    QPointF p1 = newPositions.value(i);
+                    QPointF p2 = newPositions.value(j);
+                    double l2 = (p1.x()-p2.x())*(p1.x()-p2.x()) + (p1.y()-p2.y())*(p1.y()-p2.y());
+                    if (l2 < 1.0) continue; // Ребро слишком короткое
+
+                    // Проверяем все остальные узлы k (не лежат ли они на ребре p1-p2)
+                    for (int k : keys) {
+                        if (k == i || k == j) continue;
+                        QPointF pk = newPositions.value(k);
+
+                        // Математическая проекция узла k на прямую ребра
+                        double t = ((pk.x() - p1.x()) * (p2.x() - p1.x()) + (pk.y() - p1.y()) * (p2.y() - p1.y())) / l2;
+                        
+                        // Если узел k находится ровно вдоль ребра (а не где-то сбоку)
+                        if (t > 0.05 && t < 0.95) {
+                            QPointF proj = p1 + t * (p2 - p1);
+                            double dx = pk.x() - proj.x();
+                            double dy = pk.y() - proj.y();
+                            double dist = sqrt(dx*dx + dy*dy);
+
+                            // Если узел лежит почти на линии ребра
+                            if (dist < EDGE_CLEARANCE) {
+                                // Находим перпендикуляр к ребру
+                                QPointF normal(-(p2.y() - p1.y()), (p2.x() - p1.x()));
+                                double nLen = sqrt(normal.x()*normal.x() + normal.y()*normal.y());
+                                normal /= nLen;
+
+                                // Определяем, в какую сторону лучше выталкивать
+                                double cross = (p2.x()-p1.x())*(pk.y()-p1.y()) - (p2.y()-p1.y())*(pk.x()-p1.x());
+                                if (cross < 0) normal = -normal;
+                                if (cross == 0) normal = QPointF(1, 0); // Если ровно на линии
+
+                                // Выталкиваем узел с пути ребра
+                                double pushAmount = (EDGE_CLEARANCE - dist) * 0.5;
+                                newPositions[k] += normal * pushAmount;
+                                moved = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (!moved) break; // Если пересечений нет, прерываем цикл
+    }
 
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Свойства и Матрица) ===
 
