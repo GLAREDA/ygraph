@@ -1353,6 +1353,7 @@ void MainWindow::applyLayout()
     logAction(QString("MST Layout: построено остовное дерево (%1 рёбер)")
               .arg(mst.size()));
 }
+}
 
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Свойства и Матрица) ===
 
