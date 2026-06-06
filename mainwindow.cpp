@@ -575,7 +575,8 @@ void MainWindow::updateGraphView() {
         startVertexCombo->addItem(QString::number(i+1), i);
     }
 
-    view->centerOn(0,0);
+    view->centerOn(0, 0);
+    resolveParallelEdges();
 }
 
 void MainWindow::rebuildGraphKeepPositions(int removedId) {
@@ -1224,6 +1225,7 @@ void MainWindow::applyLayout()
     } else {
         delete animGroup;
         view->centerOn(0, 0);
+        resolveParallelEdges();
     }
 }
 
@@ -2391,4 +2393,42 @@ void MainWindow::generateFiberOpticTask()
     logAction(QString("Граф: 25 вершин, 72 ребра (веса 7–18)"));
     logAction(QString("MST: %1 рёбер, суммарный вес = %2").arg(mst.size()).arg(mstWeight));
     view->centerOn(0, 0);
+}
+void MainWindow::resolveParallelEdges()
+{
+    // Собираем все рёбра
+    QList<Edge*> allEdges;
+    for (auto* item : scene->items())
+        if (auto* e = dynamic_cast<Edge*>(item))
+            allEdges.append(e);
+
+    // Сбрасываем смещения
+    for (auto* e : allEdges)
+        e->setParallelOffset(0.0);
+
+    const double OFFSET_STEP = 8.0; // пикселей между параллельными рёбрами
+
+    // Группируем рёбра по паре вершин (u,v) где u < v
+    QMap<QPair<int,int>, QList<Edge*>> edgeGroups;
+
+    for (auto* e : allEdges) {
+        int u = e->sourceNode()->getId();
+        int v = e->destNode()->getId();
+        QPair<int,int> key = { qMin(u,v), qMax(u,v) };
+        edgeGroups[key].append(e);
+    }
+
+    // Для групп с более чем одним ребром — назначаем смещения
+    for (auto& group : edgeGroups) {
+        int count = group.size();
+        if (count <= 1) continue;
+
+        // Смещения: -step*(count-1)/2, ..., 0, ..., +step*(count-1)/2
+        double totalSpan = OFFSET_STEP * (count - 1);
+        double startOffset = -totalSpan / 2.0;
+
+        for (int i = 0; i < count; ++i) {
+            group[i]->setParallelOffset(startOffset + i * OFFSET_STEP);
+        }
+    }
 }
