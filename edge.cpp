@@ -4,10 +4,12 @@
 #include <QtMath>
 
 Edge::Edge(Node *sourceNode, Node *destNode, int weight, bool isDirected)
-    : source(sourceNode), dest(destNode), weight(weight), currentColor(Qt::black), isDirected(isDirected)
+    : source(sourceNode), dest(destNode),
+      weight(weight), currentColor(Qt::black),
+      isDirected(isDirected), parallelOffset(0.0)
 {
     setAcceptedMouseButtons(Qt::NoButton);
-    setFlag(ItemIsSelectable); // Чтобы можно было удалять
+    setFlag(ItemIsSelectable);
     source->addEdge(this);
     dest->addEdge(this);
     adjust();
@@ -20,6 +22,7 @@ void Edge::setColor(const QColor &color) {
 
 void Edge::resetColor() {
     currentColor = Qt::black;
+    parallelOffset = 0.0;
     update();
 }
 
@@ -32,16 +35,16 @@ void Edge::adjust()
 
     prepareGeometryChange();
 
-    // Отступ от центра узла (радиус узла = 20 + запас)
     double nodeRadius = 25.0;
 
     if (length > nodeRadius * 2) {
-        // Сдвигаем точки начала и конца, чтобы линия касалась границ кругов
-        QPointF edgeOffset((line.dx() * nodeRadius) / length, (line.dy() * nodeRadius) / length);
+        QPointF edgeOffset(
+            (line.dx() * nodeRadius) / length,
+            (line.dy() * nodeRadius) / length
+        );
         sourcePoint = line.p1() + edgeOffset;
-        destPoint = line.p2() - edgeOffset;
+        destPoint   = line.p2() - edgeOffset;
     } else {
-        // Если узлы слишком близко, рисуем от центра (чтобы не исчезло)
         sourcePoint = destPoint = line.p1();
     }
 }
@@ -49,46 +52,73 @@ void Edge::adjust()
 QRectF Edge::boundingRect() const
 {
     if (!source || !dest) return QRectF();
-    return QRectF(sourcePoint, QSizeF(destPoint.x() - sourcePoint.x(),
-                                      destPoint.y() - sourcePoint.y()))
-        .normalized().adjusted(-10, -10, 10, 10); // Запас для текста
+
+    // Учитываем возможное перпендикулярное смещение
+    double extra = qAbs(parallelOffset) + 10.0;
+
+    return QRectF(sourcePoint,
+                  QSizeF(destPoint.x() - sourcePoint.x(),
+                         destPoint.y() - sourcePoint.y()))
+        .normalized()
+        .adjusted(-extra, -extra, extra, extra);
 }
 
-void Edge::paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidget *)
+void Edge::paint(QPainter *painter,
+                 const QStyleOptionGraphicsItem *,
+                 QWidget *)
 {
     if (!source || !dest) return;
 
-    QLineF line(sourcePoint, destPoint);
-    if (qFuzzyCompare(line.length(), qreal(0.))) return;
+    // Базовые точки
+    QLineF baseLine(sourcePoint, destPoint);
+    if (qFuzzyCompare(baseLine.length(), qreal(0.0))) return;
 
-    // 1. Рисуем саму линию
-    painter->setPen(QPen(currentColor, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    // ── Вычисляем перпендикулярное смещение ──────────────────────
+    QPointF srcDraw = sourcePoint;
+    QPointF dstDraw = destPoint;
+
+    if (qAbs(parallelOffset) > 0.001) {
+        double len = baseLine.length();
+        // Единичный перпендикуляр (повёрнут на 90°)
+        QPointF perp(-(destPoint.y() - sourcePoint.y()) / len,
+                      (destPoint.x() - sourcePoint.x()) / len);
+
+        srcDraw = sourcePoint + perp * parallelOffset;
+        dstDraw = destPoint   + perp * parallelOffset;
+    }
+
+    QLineF line(srcDraw, dstDraw);
+
+    // ── 1. Линия ──────────────────────────────────────────────────
+    painter->setPen(QPen(currentColor, 2,
+                         Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     painter->drawLine(line);
 
-    // 2. Рисуем стрелку (если ориентированный)
+    // ── 2. Стрелка (ориентированный граф) ─────────────────────────
     if (isDirected) {
         double angle = std::atan2(-line.dy(), line.dx());
 
-        // Точки стрелки
-        QPointF arrowP1 = destPoint - QPointF(sin(angle + M_PI / 3) * arrowSize,
-                                              cos(angle + M_PI / 3) * arrowSize);
-        QPointF arrowP2 = destPoint - QPointF(sin(angle + M_PI - M_PI / 3) * arrowSize,
-                                              cos(angle + M_PI - M_PI / 3) * arrowSize);
+        QPointF arrowP1 = dstDraw - QPointF(
+             sin(angle + M_PI / 3.0) * arrowSize,
+             cos(angle + M_PI / 3.0) * arrowSize);
+        QPointF arrowP2 = dstDraw - QPointF(
+             sin(angle + M_PI - M_PI / 3.0) * arrowSize,
+             cos(angle + M_PI - M_PI / 3.0) * arrowSize);
 
-        painter->setBrush(currentColor); // Заливка цветом линии
-        painter->drawPolygon(QPolygonF() << line.p2() << arrowP1 << arrowP2);
+        painter->setBrush(currentColor);
+        painter->drawPolygon(QPolygonF() << dstDraw << arrowP1 << arrowP2);
     }
 
-    // 3. Рисуем вес
+    // ── 3. Вес ────────────────────────────────────────────────────
     if (weight > 1) {
-        QPointF center = (sourcePoint + destPoint) / 2;
+        QPointF center = (srcDraw + dstDraw) / 2.0;
+        if (isDirected)
+            center = srcDraw * 0.4 + dstDraw * 0.6;
+
         painter->setPen(Qt::black);
         painter->setBrush(Qt::white);
 
-        // Сдвигаем текст, чтобы не перекрывал стрелку на коротких ребрах
-        if (isDirected) center = (sourcePoint * 0.4 + destPoint * 0.6);
-
-        QRectF textRect(center.x()-10, center.y()-10, 20, 20);
+        QRectF textRect(center.x() - 10, center.y() - 10, 20, 20);
         painter->drawRect(textRect);
         painter->drawText(textRect, Qt::AlignCenter, QString::number(weight));
     }
