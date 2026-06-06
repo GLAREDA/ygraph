@@ -2,37 +2,46 @@
 #define EDGE_H
 
 #include <QGraphicsItem>
+#include <QColor>
 
 class Node;
 
 class Edge : public QGraphicsItem
 {
 public:
-    Edge(Node *sourceNode, Node *destNode, int weight = 1);
-    Edge(Node *sourceNode, Node *destNode, int weight = 1, bool isDirected = false);
+    Edge(Node *sourceNode, Node *destNode, int weight, bool isDirected);
 
+    Node *sourceNode() const { return source; }
+    Node *destNode()   const { return dest;   }
+    int   getWeight()  const { return weight;  }
 
-    Node* sourceNode() const { return source; }
-    Node* destNode() const { return dest; }
-    void adjust();
-    void setColor(const QColor &color); // Для подсветки пути
+    void setColor(const QColor &color);
     void resetColor();
+    void adjust();
+
+    // Смещение для параллельных рёбер
+    void   setParallelOffset(double offset) { parallelOffset = offset; update(); }
+    double getParallelOffset() const        { return parallelOffset; }
+
+    QRectF boundingRect() const override;
+    void   paint(QPainter *painter,
+                 const QStyleOptionGraphicsItem *option,
+                 QWidget *widget) override;
 
     enum { Type = UserType + 2 };
     int type() const override { return Type; }
 
-protected:
-    QRectF boundingRect() const override;
-    void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
-
 private:
-    Node *source, *dest;
+    Node   *source;
+    Node   *dest;
+    int     weight;
+    bool    isDirected;
+    QColor  currentColor;
     QPointF sourcePoint;
     QPointF destPoint;
-    int weight;
-    QColor currentColor;
-    bool isDirected;
-    qreal arrowSize = 15;
+
+    double  parallelOffset = 0.0; // перпендикулярное смещение
+    static constexpr double arrowSize = 12.0;
 };
 
 #endif // EDGE_H
