@@ -1262,154 +1262,96 @@ void MainWindow::applyLayout()
 
 
     // ── 8. MST LAYOUT (Остовное дерево) ──────────────────────────
-    else if (type == 8) {
+   else if (type == 8) {
 
-        // 1. Строим MST
-        QVector<QPair<int,int>> mst = graph->getPrimMST();
-
-        if (mst.isEmpty()) {
-            QMessageBox::warning(this, "MST Layout",
-                "Не удалось построить MST.\nГраф пуст или несвязный.");
-            return;
-        }
-
-        // 2. Строим матрицу смежности только для рёбер MST
-        QVector<QVector<int>> mstMatrix(n, QVector<int>(n, 0));
-        for (auto& e : mst) {
-            mstMatrix[e.first][e.second] = 1;
-            mstMatrix[e.second][e.first] = 1;
-        }
-
-        // 3. Корень MST = вершина с максимальной степенью в MST
-        QVector<int> mstDegree(n, 0);
-        for (auto& e : mst) {
-            mstDegree[e.first]++;
-            mstDegree[e.second]++;
-        }
-        int root = 0;
-        for (int i = 1; i < n; ++i)
-            if (mstDegree[i] > mstDegree[root]) root = i;
-
-        // 4. BFS по MST для уровней
-        QVector<int> level(n, -1);
-        QVector<int> par(n, -1);
-        QQueue<int> q;
-        level[root] = 0;
-        q.enqueue(root);
-
-        while (!q.isEmpty()) {
-            int u = q.dequeue();
-            for (int v = 0; v < n; ++v) {
-                if (mstMatrix[u][v] > 0 && level[v] == -1) {
-                    level[v] = level[u] + 1;
-                    par[v] = u;
-                    q.enqueue(v);
-                }
-            }
-        }
-
-        // 5. Группируем по уровням
-        QMap<int, QVector<int>> levelGroups;
-        int maxLevel = 0;
-        for (int i = 0; i < n; ++i) {
-            int lvl = (level[i] == -1) ? 0 : level[i];
-            levelGroups[lvl].append(i);
-            maxLevel = qMax(maxLevel, lvl);
-        }
-
-        // 6. Рекурсивно считаем ширину поддерева
-        // (чтобы не было наложений дочерних узлов)
-        std::function<int(int, int)> subtreeWidth = [&](int v, int p) -> int {
-            int width = 0;
-            for (int u = 0; u < n; ++u) {
-                if (mstMatrix[v][u] > 0 && u != p) {
-                    width += subtreeWidth(u, v);
-                }
-            }
-            return qMax(1, width);
-        };
-
-        // 7. Рекурсивно расставляем позиции
-        double hSpacing = 80.0;  // минимальный горизонтальный отступ
-        double vSpacing = 120.0; // вертикальный отступ между уровнями
-
-        std::function<void(int, int, double, double)> placeNode =
-            [&](int v, int p, double x, double width) {
-                newPositions[v] = QPointF(
-                    x,
-                    level[v] * vSpacing - maxLevel * vSpacing / 2.0
-                );
-
-                // Собираем детей
-                QVector<int> children;
-                for (int u = 0; u < n; ++u)
-                    if (mstMatrix[v][u] > 0 && u != p)
-                        children.append(u);
-
-                if (children.isEmpty()) return;
-
-                // Считаем ширины поддеревьев
-                QVector<int> widths;
-                int totalWidth = 0;
-                for (int child : children) {
-                    int w = subtreeWidth(child, v);
-                    widths.append(w);
-                    totalWidth += w;
-                }
-
-                // Расставляем детей равномерно
-                double startX = x - (totalWidth - 1) * hSpacing / 2.0;
-                double curX = startX;
-
-                for (int i = 0; i < children.size(); ++i) {
-                    double childWidth = widths[i] * hSpacing;
-                    placeNode(children[i], v,
-                              curX + childWidth / 2.0 - hSpacing / 2.0,
-                              childWidth);
-                    curX += childWidth;
-                }
-            };
-
-        // Запускаем от корня
-        double totalW = subtreeWidth(root, -1) * hSpacing;
-        placeNode(root, -1, 0, totalW);
-
-        // 8. Подсвечиваем рёбра MST
-        resetEdgeColors();
-        for (auto& e : mst) {
-            highlightEdge(e.first, e.second, QColor(255, 140, 0));
-        }
-
-        logAction(QString("MST Layout: построено остовное дерево (%1 рёбер)")
-                  .arg(mst.size()));
+    // 1. Строим MST
+    QVector<QPair<int,int>> mst = graph->getPrimMST();
+    if (mst.isEmpty()) {
+        QMessageBox::warning(this, "MST Layout",
+            "Не удалось построить MST.\nГраф пуст или несвязный.");
+        return;
     }
-    // ── ПРИМЕНЕНИЕ С АНИМАЦИЕЙ ────────────────────────────────────
-    QParallelAnimationGroup *animGroup = new QParallelAnimationGroup;
 
-    for (int i = 0; i < n; ++i) {
-        if (!nodes.contains(i)) continue;
-        QPointF target = newPositions.value(i, QPointF(0,0));
+    // 2. Матрица смежности MST
+    QVector<QVector<int>> mstAdj(n, QVector<int>(n, 0));
+    for (auto& e : mst) {
+        mstAdj[e.first][e.second] = 1;
+        mstAdj[e.second][e.first] = 1;
+    }
 
-        if (animate) {
-            QPropertyAnimation *anim = new QPropertyAnimation(nodes[i], "pos");
-            anim->setDuration(800);
-            anim->setStartValue(nodes[i]->pos());
-            anim->setEndValue(target);
-            anim->setEasingCurve(QEasingCurve::OutCubic);
-            animGroup->addAnimation(anim);
+    // 3. Корень = вершина с макс. степенью в MST
+    QVector<int> mstDeg(n, 0);
+    for (auto& e : mst) { mstDeg[e.first]++; mstDeg[e.second]++; }
+    int root = std::max_element(mstDeg.begin(), mstDeg.end()) - mstDeg.begin();
+
+    // 4. BFS — уровни и родители
+    QVector<int> level(n, -1), par(n, -1);
+    QQueue<int> q;
+    level[root] = 0;
+    q.enqueue(root);
+    while (!q.isEmpty()) {
+        int u = q.dequeue();
+        for (int v = 0; v < n; ++v)
+            if (mstAdj[u][v] && level[v] == -1) {
+                level[v] = level[u] + 1;
+                par[v] = u;
+                q.enqueue(v);
+            }
+    }
+    for (int i = 0; i < n; ++i)
+        if (level[i] == -1) level[i] = 0;
+
+    // 5. Порядок обхода: DFS в порядке BFS-уровней (пост-порядок)
+    //    Считаем x-позицию каждого листа по порядку обхода,
+    //    затем родители получают среднее детей — без наложений гарантированно.
+
+    const double NODE_SIZE = 40.0;   // диаметр вершины
+    const double H_GAP    = 20.0;    // минимальный зазор между вершинами
+    const double SLOT     = NODE_SIZE + H_GAP; // шаг на лист
+    const double V_STEP   = 120.0;
+
+    // DFS пост-порядок: сначала листья получают x, потом родители
+    QVector<double> xPos(n, 0.0);
+    double leafCounter = 0.0;
+
+    std::function<void(int, int)> assignX = [&](int v, int p) {
+        QVector<int> children;
+        for (int u = 0; u < n; ++u)
+            if (mstAdj[v][u] && u != p)
+                children.append(u);
+
+        if (children.isEmpty()) {
+            // Лист: берём следующую свободную позицию
+            xPos[v] = leafCounter * SLOT;
+            leafCounter += 1.0;
         } else {
-            nodes[i]->setPos(target);
+            for (int c : children)
+                assignX(c, v);
+            // Родитель: центр над детьми
+            xPos[v] = (xPos[children.first()] + xPos[children.last()]) / 2.0;
         }
-    }
+    };
+    assignX(root, -1);
 
-    if (animate) {
-        animGroup->start(QAbstractAnimation::DeleteWhenStopped);
-        connect(animGroup, &QParallelAnimationGroup::finished,
-                [=](){ view->centerOn(0,0); });
-    } else {
-        delete animGroup;
-        view->centerOn(0, 0);
-    }
+    // 6. Центрируем по x
+    double minX = *std::min_element(xPos.begin(), xPos.end());
+    double maxX = *std::max_element(xPos.begin(), xPos.end());
+    double offsetX = (minX + maxX) / 2.0;
+
+    int maxLevel = *std::max_element(level.begin(), level.end());
+    for (int i = 0; i < n; ++i)
+        newPositions[i] = QPointF(
+            xPos[i] - offsetX,
+            level[i] * V_STEP - maxLevel * V_STEP / 2.0
+        );
+
+    // 7. Подсвечиваем рёбра MST
+    resetEdgeColors();
+    for (auto& e : mst)
+        highlightEdge(e.first, e.second, QColor(255, 140, 0));
+
+    logAction(QString("MST Layout: построено остовное дерево (%1 рёбер)")
+              .arg(mst.size()));
 }
 
 // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Свойства и Матрица) ===
