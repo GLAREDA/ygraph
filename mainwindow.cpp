@@ -7,7 +7,7 @@
 #include <QHBoxLayout>
 #include <QGroupBox>
 #include <QMessageBox>
-#include <QHeaderView>а
+#include <QHeaderView>
 #include <QLineF>
 #include <QScrollBar>
 #include <QInputDialog>
