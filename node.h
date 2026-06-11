@@ -1,7 +1,7 @@
 #ifndef NODE_H
 #define NODE_H
 
-#include <QGraphicsObject> // <--- БЫЛО QGraphicsItem
+#include <QGraphicsObject>
 #include <QList>
 #include <QBrush>
 #include <QColor>
@@ -11,7 +11,7 @@ class Edge;
 // Наследуемся от QGraphicsObject для поддержки анимации
 class Node : public QGraphicsObject
 {
-    Q_OBJECT // <--- ОБЯЗАТЕЛЬНО для анимации
+    Q_OBJECT 
 
 public:
     Node(int id);
@@ -48,8 +48,8 @@ private:
     int id;
     QColor currentColor;
     QPointF newPos;
-    QColor baseColor;    // Истинный цвет (красный, синий...)
+    QColor baseColor;    
     QColor visualColor;
 };
 
-#endif // NODE_H
+#endif 
