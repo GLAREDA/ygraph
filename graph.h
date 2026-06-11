@@ -10,11 +10,9 @@
 #include <cmath>
 #include <climits> // Для INT_MAX
 
-// === СНАЧАЛА ОБЪЯВЛЯЕМ КЛАСС POLYNOMIAL ===
-// (До того, как он используется в Graph)
 class Polynomial {
 public:
-    QVector<long long> coeffs; // Индекс = степень (coeffs[2] это x^2)
+    QVector<long long> coeffs; 
 
     Polynomial() {}
 
