@@ -3,7 +3,6 @@
 #include <QPainter>
 #include <QStyleOption>
 #include <QGraphicsScene>
-
 // Конструктор
 Node::Node(int id) : id(id)
 {
